@@ -1,0 +1,6 @@
+# Builds and their outputs, the code generator a kit brings, profile runs
+/out/
+/bin/
+/pgo/
+/pgo-o2/
+__pycache__/

@@ -1,0 +1,47 @@
+# The game (Xbox 360, title 4E4D0855, TW2; default.xex
+# "game_x360.Release - Game LTCG.exe", XDK 2.0.21076, version 0.0.0.2, disc 1 of 2).
+# The game's files are not part of this project: put default.xex from the disc and the title update's (TU1, disc 1)
+# default.xexp in app/assets/. rexglue's loader applies "<xex>p" when it loads an xex (0.0.0.2 -> 0.0.1.2), for the
+# code generator as at run time, so the code is generated from the updated game.
+# No other modules (the import table names only xam.xex and xboxkrnl.exe).
+[project]
+name = "tw2de"
+sdk_version = "0.10.0"
+game_root = "assets"
+
+[entrypoint]
+file_path = "assets/default.xex"
+out_directory_path = "generated/default"
+includes = ["overrides.toml"]
+# Each function in its own file (generated/default/tw2de_recomp_<address>.cpp): a function's file and lines stay
+# the same when others change, which keeps a GCC profile (PGO) valid for it. build_switch.py --batched turns it off.
+one_function_per_file = true
+# fctid / fctidz / fctiw through rex::ppc (diet_ops.h): PowerPC's rounding (FPSCR.RN). Game-independent (FNXF XIII).
+fcti_inline = true
+# rlwinm / rlwimi with an immediate shift and a mask that does not wrap as the plain shift / bit-field operation.
+# Game-independent (FNXF XIII, sdk/tests/rotate_word_test.cpp).
+rotate_word_shifts = true
+# TW2 (2026-11-13): FNXF XIII's register-locals options (its notes: 11% fewer instructions on its hot functions, 18% with
+# non_argument_as_local; about 60% fewer loads and stores of the context): r14-r31, f14-f31, the condition fields, CTR,
+# XER and the lwarx reservation in C++ locals of each function, then r0, r2, r11, r12, f0 and v32-v63 too. Audited on
+# this game's code (NOTES.md, "Register locals"):
+#  - tools/non_argument_audit.py on the code without the options (the loop / leaf locals spelled back as ctx.X):
+#    ENTRY 326 (the save/restore helpers and the SEH funclets' r12, the stack probe, the codec's vector functions that
+#    take v32-v63 / v57-v62) and RET 33 (r11 from sub_82DB4780 / sub_82DB47B8 / sub_8287D5F0, the codec's v32-v63
+#    around its register save and restore sub_830060E8 / sub_83006430; four `subfe rX,r11,r11`, independent of the
+#    value): every function named there, caller and callee, is in non_argument_as_local_keep below (155).
+#  - every lwarx and its stwcx. are in the same function (672 functions).
+#  - no function reads a condition field or XER a callee would have to set; CTR only across the compiler's u64-to-double
+#    helper sub_8286D430, which does not touch it (a local keeps it); setjmp (82DEA930) is replaced by the generator.
+#  - the vector registers v14-v31 / v64-v127 stay in ctx as in FNXF XIII (the codec keeps tables in v64-v127 across
+#    its functions: sub_830060E8 loads them).
+# Off: delete these lines (a full rebuild either way: every generated file changes).
+non_volatile_as_local = true
+cr_as_local = true
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+non_volatile_as_local_keep = ["v14-v31", "v64-v127"]
+non_argument_as_local = true
+non_argument_as_local_keep = [0x824737EC, 0x82473828, 0x82473854, 0x82473890, 0x824738C4, 0x82473900, 0x82473934, 0x82473970, 0x824739A4, 0x82473C04, 0x824746B8, 0x824747A0, 0x824749B8, 0x82475D64, 0x82507740, 0x82516068, 0x8271A450, 0x8286B024, 0x8286B044, 0x8286B24C, 0x8286B26C, 0x8286B5AC, 0x8286B5CC, 0x8286B954, 0x8286B974, 0x8286BFC0, 0x8286BFEC, 0x8286C0F4, 0x8286C114, 0x8286C790, 0x8286E614, 0x8286F634, 0x8286F654, 0x8286F93C, 0x8286F95C, 0x8286FAA4, 0x8286FAC4, 0x8287002C, 0x8287004C, 0x828743D0, 0x828743F0, 0x8287483C, 0x8287485C, 0x828751B8, 0x828751D8, 0x828755B0, 0x828755D0, 0x82876F60, 0x82876F80, 0x8287A38C, 0x8287A3AC, 0x8287AA18, 0x8287AA38, 0x8287D27C, 0x8287D29C, 0x8287D528, 0x8287D5F0, 0x8287EB5C, 0x8287EB7C, 0x8287FB1C, 0x8287FB3C, 0x8288D7D0, 0x8288D7F8, 0x8288DAC4, 0x8288DAEC, 0x8288E388, 0x8288E3A8, 0x828E2ED8, 0x8294D558, 0x82B5B588, 0x82B5BAA0, 0x82B5BBB0, 0x82B5BD10, 0x82B5BF40, 0x82B606F8, 0x82B66908, 0x82BAC478, 0x82BC1AC8, 0x82BC8C00, 0x82BC8CB8, 0x82BD3E88, 0x82BE7500, 0x82BFA478, 0x82C11980, 0x82C123A0, 0x82C5F020, 0x82C6CE38, 0x82C700A8, 0x82C70530, 0x82C79078, 0x82C836C8, 0x82C85C60, 0x82C98DC8, 0x82C99650, 0x82C9CF08, 0x82CA0060, 0x82CA70B0, 0x82CA8090, 0x82CB0B38, 0x82CC41D0, 0x82CE1AE0, 0x82CE47E0, 0x82CE48F0, 0x82CE8FC0, 0x82CE9950, 0x82DA5D80, 0x82DA6268, 0x82DA7A30, 0x82DA7E80, 0x82DA81F0, 0x82DA85F8, 0x82DB4780, 0x82DB47B8, 0x82DEA140, 0x82DEA160, 0x82DEA8FC, 0x82DEB3DC, 0x82DEB3FC, 0x82DEB6CC, 0x82DEB7C4, 0x82DEB7FC, 0x82DEB8F0, 0x82DEB920, 0x82DEBCE8, 0x82DEBD14, 0x82DF114C, 0x82DF1160, 0x82E0AB2C, 0x82E0B524, 0x82E120F8, 0x82EC89E8, 0x82EDDB20, 0x82F91D70, 0x82FE1744, 0x82FE1808, 0x82FFA428, 0x82FFAC88, 0x82FFE990, 0x82FFF748, 0x830020D0, 0x83002C30, 0x83002DC0, 0x83005668, 0x83005788, 0x830058A0, 0x83005A10, 0x83005B50, 0x83005CF8, 0x830060E8, 0x83006430, 0x8301F440, 0x83020428, 0x83020A78, 0x83020FD0, 0x83034E08]
+fp_origin_log = false

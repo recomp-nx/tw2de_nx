@@ -1,0 +1,146 @@
+#==========================================================
+# rexglue_helpers.cmake
+#
+# Three helpers, each with a single responsibility:
+#   rexglue_apply_target_settings(<target>)        - common compile/platform flags
+#   rexglue_configure_target(<target>)             - host application
+#   rexglue_configure_module_target(<target> ...)  - guest DLL module
+#==========================================================
+include_guard(GLOBAL)
+
+# tw2de (2026-11-09): the script that fits a DLL module's object into the executable (dll_targets.cmake).
+set(REXGLUE_STATIC_MODULE_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/rexglue_static_module.cmake" CACHE INTERNAL "")
+
+#==========================================================
+# rexglue_apply_target_settings(<target>) - Common flags
+#
+# Applied to both host apps and guest DLL modules. Compile/link flags only;
+# runtime DLL staging is the host's job (see rexglue_configure_target).
+#==========================================================
+function(rexglue_apply_target_settings target_name)
+    # tw2de (2026-10-29): the Switch only: its flags are the toolchain file's (switch-devkitA64.cmake); the SDK's
+    # PC flags (x86-64's large code model, SSE4.1) are gone with its PC builds.
+endfunction()
+
+#==========================================================
+# rexglue_configure_target(<target> [GPU_PLUGINS ...]) - the title
+#
+# tw2de (2026-10-29): the Switch only: a single static NRO (cmake/rexglue_switch.cmake). The SDK's PC hosts (SDL3
+# entry point, shared runtime, DLL staging) are gone.
+#==========================================================
+function(rexglue_configure_target target_name)
+    rexglue_switch_configure_target(${target_name} ${ARGN})
+endfunction()
+
+#==========================================================
+# rexglue_configure_module_target(<target> [HOST <host_target>])
+#   - Guest DLL module
+#
+# Output is colocated with HOST (or CMAKE_RUNTIME_OUTPUT_DIRECTORY) so the
+# host's LoadUserModule finds it; the host is wired to depend on the module
+# so a top-level build of the host pulls in all guest DLLs. No runtime DLL
+# staging here; the host's POST_BUILD copy covers shared dependencies.
+#==========================================================
+function(rexglue_configure_module_target target_name)
+    cmake_parse_arguments(ARG "" "HOST" "" ${ARGN})
+
+    if(ARG_HOST)
+        set_target_properties(${target_name} PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:${ARG_HOST}>
+            RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:${ARG_HOST}>
+            ARCHIVE_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:${ARG_HOST}>
+        )
+        # Defer add_dependencies so the host target may be declared after
+        # this module call. Wrapping in EVAL CODE expands the variables now,
+        # which DEFER CALL otherwise treats as literal argument text.
+        cmake_language(EVAL CODE
+            "cmake_language(DEFER CALL add_dependencies ${ARG_HOST} ${target_name})")
+    elseif(CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        set_target_properties(${target_name} PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        )
+    endif()
+
+    rexglue_apply_target_settings(${target_name})
+endfunction()
+
+#==========================================================
+# rexglue_embed_metadata(<target> DIRECTORY <dir> [PREFIX <relative-prefix>])
+#
+# Embeds files into the host executable as metadata assets. Runtime lookups use
+# paths relative to the metadata root, so embedding metadata/icons with PREFIX
+# icons makes "icons/foo.png" resolve without a loose sidecar file.
+#==========================================================
+function(rexglue_embed_metadata target_name)
+    cmake_parse_arguments(ARG "" "DIRECTORY;PREFIX" "" ${ARGN})
+
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "rexglue_embed_metadata: target '${target_name}' does not exist")
+    endif()
+    if(NOT ARG_DIRECTORY)
+        message(FATAL_ERROR "rexglue_embed_metadata: DIRECTORY is required")
+    endif()
+    if(NOT IS_DIRECTORY "${ARG_DIRECTORY}")
+        message(FATAL_ERROR "rexglue_embed_metadata: '${ARG_DIRECTORY}' is not a directory")
+    endif()
+
+    file(GLOB_RECURSE _rexglue_metadata_files
+        CONFIGURE_DEPENDS
+        "${ARG_DIRECTORY}/*")
+
+    set(_rexglue_regular_files)
+    foreach(_rexglue_file IN LISTS _rexglue_metadata_files)
+        if(NOT IS_DIRECTORY "${_rexglue_file}")
+            list(APPEND _rexglue_regular_files "${_rexglue_file}")
+        endif()
+    endforeach()
+
+    if(NOT _rexglue_regular_files)
+        message(STATUS "rexglue_embed_metadata: no files found in ${ARG_DIRECTORY}")
+        return()
+    endif()
+
+    string(MAKE_C_IDENTIFIER "${target_name}" _rexglue_target_id)
+    set(_rexglue_output_dir "${CMAKE_CURRENT_BINARY_DIR}/rexglue_embedded_metadata")
+    set(_rexglue_output "${_rexglue_output_dir}/${_rexglue_target_id}_embedded_metadata.cpp")
+    file(MAKE_DIRECTORY "${_rexglue_output_dir}")
+
+    set(_rexglue_content "// Auto-generated by rexglue_embed_metadata - DO NOT EDIT\n")
+    string(APPEND _rexglue_content
+        "#include <cstddef>\n"
+        "#include <cstdint>\n"
+        "#include <rex/embedded_metadata.h>\n\n"
+        "namespace {\n\n")
+
+    set(_rexglue_count 0)
+    foreach(_rexglue_file IN LISTS _rexglue_regular_files)
+        file(RELATIVE_PATH _rexglue_rel "${ARG_DIRECTORY}" "${_rexglue_file}")
+        string(REPLACE "\\" "/" _rexglue_rel "${_rexglue_rel}")
+        if(ARG_PREFIX)
+            string(REPLACE "\\" "/" _rexglue_prefix "${ARG_PREFIX}")
+            string(REGEX REPLACE "/$" "" _rexglue_prefix "${_rexglue_prefix}")
+            set(_rexglue_asset_path "${_rexglue_prefix}/${_rexglue_rel}")
+        else()
+            set(_rexglue_asset_path "${_rexglue_rel}")
+        endif()
+        string(REPLACE "\"" "\\\"" _rexglue_asset_path "${_rexglue_asset_path}")
+
+        string(MD5 _rexglue_asset_id "${_rexglue_asset_path}")
+        file(READ "${_rexglue_file}" _rexglue_hex HEX)
+        string(REGEX REPLACE "([0-9A-Fa-f][0-9A-Fa-f])" "0x\\1," _rexglue_bytes "${_rexglue_hex}")
+
+        string(APPEND _rexglue_content
+            "const std::uint8_t kAsset_${_rexglue_asset_id}[] = {${_rexglue_bytes}};\n"
+            "const bool kRegistered_${_rexglue_asset_id} = "
+            "::rex::RegisterEmbeddedMetadataAsset(\"${_rexglue_asset_path}\", "
+            "kAsset_${_rexglue_asset_id}, sizeof(kAsset_${_rexglue_asset_id}));\n\n")
+        math(EXPR _rexglue_count "${_rexglue_count} + 1")
+    endforeach()
+
+    string(APPEND _rexglue_content "}  // namespace\n")
+    file(WRITE "${_rexglue_output}" "${_rexglue_content}")
+    target_sources(${target_name} PRIVATE "${_rexglue_output}")
+    message(STATUS "Embedded ${_rexglue_count} metadata asset(s) into ${target_name}")
+endfunction()

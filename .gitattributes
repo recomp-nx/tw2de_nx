@@ -1,0 +1,5 @@
+# The sources are kept with LF line ends on every system (the shaders' text and the translator's header are hashed
+# as they are); the Windows batch files with CRLF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary

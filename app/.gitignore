@@ -1,0 +1,6 @@
+assets/*
+!assets/PUT_DEFAULT_XEX_HERE.txt
+generated/default/
+cache/
+codegen.log
+diag_backup/

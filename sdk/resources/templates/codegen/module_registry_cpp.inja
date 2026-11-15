@@ -1,0 +1,20 @@
+//=============================================================================
+// ReXGlue Generated - {{ project }} Module Registry
+//=============================================================================
+
+#include <rex/system/kernel_state.h>
+
+// tw2de (2026-11-09): the DLL modules are linked into the executable (the Switch has no shared libraries):
+// dll_targets.cmake gives each one's entry points the module's suffix.
+{% for mod in dll_modules %}extern "C" void ReXModule_Register_{{ mod.symbol }}(rex::runtime::IModuleRegistrar* registrar);
+extern "C" const rex::PPCImageInfo* ReXModule_GetImageInfo_{{ mod.symbol }}();
+{% endfor %}
+void RegisterRecompiledModules(rex::system::KernelState* kernel_state) {
+{% for mod in dll_modules %}
+  kernel_state->RegisterRecompiledModule(
+      "{{ mod.pe_name }}",
+      "{{ mod.guest_path }}",
+      ReXModule_Register_{{ mod.symbol }},
+      ReXModule_GetImageInfo_{{ mod.symbol }});
+{% endfor %}
+}
