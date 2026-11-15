@@ -10,9 +10,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <thread>
 #include <condition_variable>
 #include <mutex>
+#include <string>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -378,20 +381,59 @@ int64_t ReadIndex(DkshCache &c, int64_t length) {
   return end;
 }
 
+// TW2 (2026-11-15): the default flags' cache is deko3d_shaders.bin. Builds up to 0.1.0 named it
+// deko3d_shaders_f11711.bin: that file and what it derives take the plain name at the first start (renamed: the
+// compiled shaders stay). A deko3d_shaders.bin already there is from before 2026-11-12 (11711's and 77247's records
+// in one file) and goes first with all it derives, so none of its parts stays next to the cache that takes the name.
+constexpr unsigned kDefaultUamFlags = 11711u;
+
+std::string DefaultCachePath() {
+  static constexpr const char *kDerived[] = {".idx", ".end", ".gen", ".fast"};
+  const std::string plain = ShaderDataPath("deko3d_shaders.bin").string();
+  const std::string flagged = ShaderDataPath(fmt::format("deko3d_shaders_f{}.bin", kDefaultUamFlags)).string();
+  std::error_code ec;
+  if (std::filesystem::exists(flagged, ec)) {
+    CacheFile::Delete(plain);
+    for (const char *derived : kDerived)
+      CacheFile::Delete(plain + derived);
+    std::filesystem::rename(flagged, plain, ec);
+    if (ec) {
+      REXLOG_WARN("[deko3d] DKSH cache {}: could not be renamed to {} ({}); used under its old name", flagged, plain,
+                  ec.message());
+      return flagged;
+    }
+    REXLOG_INFO("[deko3d] DKSH cache {} renamed to {}", flagged, plain);
+  }
+  // What the old name derives follows (also after a start that stopped between the two). A part the plain name
+  // already has is the newer one: the old name's goes.
+  for (const char *derived : kDerived) {
+    if (!std::filesystem::exists(flagged + derived, ec))
+      continue;
+    std::error_code moved;
+    if (std::filesystem::exists(plain + derived, ec))
+      moved = std::make_error_code(std::errc::file_exists);
+    else
+      std::filesystem::rename(flagged + derived, plain + derived, moved);
+    if (moved)
+      CacheFile::Delete(flagged + derived);
+  }
+  return plain;
+}
+
 void LoadCacheOnce() {
   DkshCache &c = g_cache;
   const uint64_t t_start = NowNs();
   int64_t index_end = -1;  // tw2de (2026-10-23): <path>.idx's records, then the walk from its end
   size_t from_index = 0, walked = 0;
   // tw2de (2026-10-18): the code uam makes with other flags (tw2de_deko3d_uam_prmt, tw2de_deko3d_uam_gvn off) has a
-  // cache of its own.
+  // cache of its own, with the flags in its name (deko3d_shaders_f<flags>.bin).
   const unsigned flags = Deko3DUamFlags();
-  // tw2de (2026-10-22): 77247 (11711 and the global sink) keeps the cache of 11711: its records are as good as
-  // before, and those above 56 registers are compiled again (kCacheGen).
   // TW2 (2026-11-12): 11711 a file of its own (it shared 77247's, whose shaders the pressure sink across blocks may
   // have miscompiled: the G-buffer's red).
-  c.path = ShaderDataPath(flags == 77247u ? std::string("deko3d_shaders.bin")
-                                          : "deko3d_shaders_f" + std::to_string(flags) + ".bin").string();
+  // TW2 (2026-11-15): that file is deko3d_shaders.bin, the default flags' cache with no flags in its name
+  // (DefaultCachePath); 77247 has deko3d_shaders_f77247.bin.
+  c.path = flags == kDefaultUamFlags ? DefaultCachePath()
+                                     : ShaderDataPath(fmt::format("deko3d_shaders_f{}.bin", flags)).string();
   const int64_t reserve = int64_t(std::max(0, int(REXCVAR_GET(tw2de_dksh_cache_reserve_mb)))) << 20;
   constexpr int64_t kHead = 24;
   bool fresh = !c.file.Open(c.path, -1);

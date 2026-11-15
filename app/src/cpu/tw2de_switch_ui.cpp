@@ -23,6 +23,7 @@
 
 #include "cpu/tw2de_lang_pack.h"  // DecodePng
 #include "cpu/tw2de_switch_ui_core.h"
+#include "renut_engine/gpu/nx_shaders/boot_menu_switch.h"  // CameraSpeedLabel
 #include "tw2de_romfs.h"
 
 #include <rex/cvar.h>
@@ -47,6 +48,7 @@ REXCVAR_DEFINE_BOOL(tw2de_switch_ui, true, "Game/Enhancements",
                     "storage device\" in the options, no advice to install the game to the hard drive")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DECLARE(bool, input_xbox_layout);  // sdk/src/input/switch/switch_input_driver.cpp
+REXCVAR_DECLARE(std::string, tw2de_game_language);  // cpu/tw2de_language.cpp: the game's language code
 
 REX_EXTERN(__imp__sub_82E61580);  // the script native ShowInstallInfo(object, stack r4, result r5)
 
@@ -114,6 +116,11 @@ std::shared_ptr<const rex::filesystem::FilePatch> Provide(std::string_view guest
   LoadPng("tex/tw2_pad_icons.png", assets.icons);
   LoadPng("tex/tw2_pad.png", assets.pad);
   assets.xbox_layout = REXCVAR_GET(input_xbox_layout);
+  // TW2 (2026-11-16): the control options' camera speed rows (cpu/tw2de_camera_speed.cpp), named in the language
+  // the game starts in.
+  assets.camera_rows = true;
+  assets.camera_label_x = renut::nxs::CameraSpeedLabel(REXCVAR_GET(tw2de_game_language), 0);
+  assets.camera_label_y = renut::nxs::CameraSpeedLabel(REXCVAR_GET(tw2de_game_language), 1);
   std::FILE *f = std::fopen(host_path.string().c_str(), "rb");
   if (!f) {
     REXLOG_WARN("[switch ui] {} could not be opened: the game's interface stays as it is", host_path.string());
@@ -134,11 +141,12 @@ std::shared_ptr<const rex::filesystem::FilePatch> Provide(std::string_view guest
   for (const switch_ui::Range &range : result.ranges)
     held += range.data.size();
   REXLOG_INFO("[switch ui] {}: {} button picture files and {} pictures in {} .swf files ({}), the controller picture "
-              "{}, the options menu's storage row {}; {} ranges, {:.0f} KB past the archive's end ({:.0f} KB of them in "
-              "memory), {:.0f} ms",
+              "{}, the options menu's storage row {}, the camera speed rows {}; {} ranges, {:.0f} KB past the archive's "
+              "end ({:.0f} KB of them in memory), {:.0f} ms",
               std::string(guest_path), result.icon_files, result.swf_pictures, result.swf_files,
               assets.xbox_layout ? "by position" : "by letter", result.pad ? "replaced" : "kept",
-              result.menu ? "removed" : "kept", result.ranges.size(), double(result.size - size) / 1024.0,
+              result.menu ? "removed" : "kept", result.camera ? "added" : "not added", result.ranges.size(),
+              double(result.size - size) / 1024.0,
               double(held) / 1024.0, ms);
   auto patch = std::make_shared<rex::filesystem::FilePatch>();
   patch->real_size = size;

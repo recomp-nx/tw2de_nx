@@ -604,7 +604,195 @@ bool PatchControls(std::vector<uint8_t> &swf, const Image &pad, std::vector<bool
 // (the pictures after the GFX data move with it). A chosen row calls the game with its ID, not its place in the list.
 constexpr int kStorageItem = 56;
 
-bool PatchMainMenu(std::vector<uint8_t> &swf, std::string &note) {
+// `bytes` put at `at` inside a DoInitAction tag's actions (tag_data .. tag_data + tag_size), and what holds that
+// point or jumps across it made longer: a function's code size, the jumps and ifs, the tag's length and the GFX
+// length (the pictures after the GFX data move with it).
+bool InsertActions(std::vector<uint8_t> &swf, size_t tag_header, size_t tag_data, size_t &tag_size, size_t at,
+                   const std::vector<uint8_t> &bytes, std::string &note) {
+  const size_t code = tag_data + 2, end = tag_data + tag_size;
+  const int grow = int(bytes.size());
+  for (size_t a = code; a < end;) {
+    const uint8_t op = swf[a];
+    size_t body = a + 1, size = 0;
+    if (op >= 0x80) {
+      if (a + 3 > end)
+        break;
+      size = Le16(swf.data() + a + 1);
+      body = a + 3;
+    }
+    if (body + size > end)
+      break;
+    if ((op == 0x9B || op == 0x8E) && size >= 2) {  // a function: its code follows, its size the record's last word
+      const size_t code_size = Le16(swf.data() + body + size - 2), first = body + size;
+      if (first <= at && at < first + code_size) {
+        if (code_size + grow > 0xFFFF) {
+          note = "ui_mainmenu.swf: the function is too long";
+          return false;
+        }
+        PutLe16(swf.data() + body + size - 2, uint32_t(code_size + grow));
+      }
+    } else if (op == 0x94 || op == 0x8F) {  // with / try: none around the list's loop
+      size_t region = 0;
+      if (op == 0x94 && size >= 2)
+        region = Le16(swf.data() + body);
+      else if (size >= 7)
+        region = size_t(Le16(swf.data() + body + 1)) + Le16(swf.data() + body + 3) + Le16(swf.data() + body + 5);
+      if (body + size <= at && at < body + size + region) {
+        note = "ui_mainmenu.swf: the list's loop is inside a with or try block";
+        return false;
+      }
+    } else if ((op == 0x99 || op == 0x9D) && size == 2) {  // jump / if
+      const size_t next = body + 2;
+      const int offset = int16_t(Le16(swf.data() + body));
+      const long target = long(next) + offset;
+      int moved = offset;
+      if (next <= at && target > long(at))
+        moved += grow;
+      else if (a >= at && target <= long(at))
+        moved -= grow;
+      if (moved < -32768 || moved > 32767) {
+        note = "ui_mainmenu.swf: a jump is too long";
+        return false;
+      }
+      PutLe16(swf.data() + body, uint32_t(uint16_t(int16_t(moved))));
+    }
+    a = body + size;
+  }
+  PutLe32(swf.data() + tag_header + 2, uint32_t(tag_size + grow));
+  PutLe32(swf.data() + 4, uint32_t(Le32(swf.data() + 4) + grow));
+  swf.insert(swf.begin() + long(at), bytes.begin(), bytes.end());
+  tag_size += size_t(grow);
+  return true;
+}
+
+// TW2 (2026-11-16; the user: the camera's speed in the game's own Control options, "the same kind of slider as for
+// Gamma", one for each axis, changed while the game runs). ActionScript put at the start of DataFilled(data):
+//     if (this.tw2ListY == undefined) this.tw2ListY = this.m_iDefaultYListPosition;
+//     this.m_iDefaultYListPosition = this.tw2ListY;
+//     for (i = 0; i < data.MainItems.length; i++) {
+//       id = data.MainItems[i][1];
+//       if (id == 54 || id == 45 || id == 46 || id == 49) {      // the control options' rows: the controller's
+//         data.MainItems.push([MM_SLIDER, 9001, name, 0, 1,     // picture, invert X, invert Y, vibrations
+//                              ExternalInterface.call("Tw2CamSpeed", 0)]);
+//         data.MainItems.push([MM_SLIDER, 9002, name, 0, 1, ExternalInterface.call("Tw2CamSpeed", 1)]);
+//         this.m_iDefaultYListPosition = this.tw2ListY - 152;
+//         break;
+//       }
+//     }
+// The list's place: DataFilled puts mc_mainList at m_iDefaultYListPosition (398 of the 720 lines; set once, in
+// Construct) less 150 for an options list, which leaves room for the game's five rows of 76 lines each (the list is
+// drawn at 125 %): with seven, the last was below the screen (the user's picture, 2026-11-16). For this list the
+// place is two rows higher; the logo is to the right of the list (m_mcLogoPlaceholder at 597, 133), not above it.
+// The class's own value is kept in tw2ListY and put back at every other list.
+// A slider row is [type, id, name, lowest, highest, value]; the list's slider has 40 places and calls the game with
+// ItemChanged(id, value) at each step. Both calls are answered in cpu/tw2de_camera_speed.cpp, before the game's own
+// handler. Registers 3 and 4 are DataFilled's own locals, set by it after this. Strings are written out (the tag's
+// constants are not added to).
+struct As2 {
+  std::vector<uint8_t> out, items;
+  As2 &Str(const std::string &s) {
+    items.push_back(0);
+    items.insert(items.end(), s.begin(), s.end());
+    items.push_back(0);
+    return *this;
+  }
+  As2 &Word(uint8_t type, uint32_t v) {
+    items.push_back(type);
+    for (int i = 0; i < 4; i++)
+      items.push_back(uint8_t(v >> (8 * i)));
+    return *this;
+  }
+  As2 &Float(float v) {
+    uint32_t u;
+    std::memcpy(&u, &v, 4);
+    return Word(1, u);
+  }
+  As2 &Int(int32_t v) { return Word(7, uint32_t(v)); }
+  As2 &Reg(uint8_t r) {
+    items.push_back(4);
+    items.push_back(r);
+    return *this;
+  }
+  As2 &Undefined() {
+    items.push_back(3);
+    return *this;
+  }
+  As2 &Push() {  // the items so far, as one push
+    out.push_back(0x96);
+    out.push_back(uint8_t(items.size()));
+    out.push_back(uint8_t(items.size() >> 8));
+    out.insert(out.end(), items.begin(), items.end());
+    items.clear();
+    return *this;
+  }
+  As2 &Op(uint8_t op) {
+    out.push_back(op);
+    return *this;
+  }
+  As2 &Store(uint8_t r) {
+    const uint8_t b[] = {0x87, 0x01, 0x00, r};
+    out.insert(out.end(), b, b + sizeof(b));
+    return *this;
+  }
+  As2 &Jump(uint8_t op, int offset) {
+    const uint8_t b[] = {op, 0x02, 0x00, uint8_t(offset), uint8_t(offset >> 8)};
+    out.insert(out.end(), b, b + sizeof(b));
+    return *this;
+  }
+};
+constexpr uint8_t kGetVariable = 0x1C, kGetMember = 0x4E, kSetMember = 0x4F, kCallMethod = 0x52, kPop = 0x17,
+                  kEquals = 0x49, kLess = 0x48, kNot = 0x12, kOr = 0x11, kSubtract = 0x0B, kIncrement = 0x50,
+                  kInitArray = 0x42, kJump = 0x99, kIf = 0x9D;
+constexpr int kCameraListRise = 152;  // two rows of the options list
+
+std::vector<uint8_t> CameraRows(const Assets &assets) {
+  auto row = [](As2 &a, int axis, int id, const std::string &name) {
+    a.Int(axis).Str(kCameraValueCall).Int(2).Str("flash").Push().Op(kGetVariable);
+    a.Str("external").Push().Op(kGetMember).Str("ExternalInterface").Push().Op(kGetMember);
+    a.Str("call").Push().Op(kCallMethod);                             // the value, left on the stack
+    a.Float(1.0f).Float(0.0f).Str(name).Int(id).Push();               // highest, lowest, name, id
+    a.Str("gui").Push().Op(kGetVariable).Str("vo").Push().Op(kGetMember).Str("voMenuItem").Push().Op(kGetMember);
+    a.Str("MM_SLIDER").Push().Op(kGetMember);                         // the type
+    a.Int(6).Push().Op(kInitArray);
+    a.Int(1).Reg(2).Str("MainItems").Push().Op(kGetMember).Str("push").Push().Op(kCallMethod).Op(kPop);
+  };
+  As2 keep, init, test, find, step, add;
+  // The list's own place, remembered once and put back.
+  keep.Reg(1).Str("tw2ListY").Reg(1).Str("m_iDefaultYListPosition").Push().Op(kGetMember).Op(kSetMember);
+  init.Reg(1).Str("tw2ListY").Push().Op(kGetMember).Undefined().Push().Op(kEquals).Op(kNot);
+  init.Jump(kIf, int(keep.out.size()));
+  init.out.insert(init.out.end(), keep.out.begin(), keep.out.end());
+  init.Reg(1).Str("m_iDefaultYListPosition").Reg(1).Str("tw2ListY").Push().Op(kGetMember).Op(kSetMember);
+  init.Int(0).Push().Store(3).Op(kPop);
+  test.Reg(3).Reg(2).Str("MainItems").Push().Op(kGetMember).Str("length").Push().Op(kGetMember).Op(kLess).Op(kNot);
+  find.Reg(2).Str("MainItems").Push().Op(kGetMember).Reg(3).Push().Op(kGetMember).Int(1).Push().Op(kGetMember);
+  find.Store(4).Op(kPop);
+  find.Reg(4).Int(54).Push().Op(kEquals);
+  for (const int id : {45, 46, 49})
+    find.Reg(4).Int(id).Push().Op(kEquals).Op(kOr);
+  step.Reg(3).Push().Op(kIncrement).Store(3).Op(kPop);
+  row(add, 0, kCameraItemX, assets.camera_label_x);
+  row(add, 1, kCameraItemY, assets.camera_label_y);
+  add.Reg(1).Str("m_iDefaultYListPosition").Reg(1).Str("tw2ListY").Push().Op(kGetMember);
+  add.Int(kCameraListRise).Push().Op(kSubtract).Op(kSetMember);
+  // init | loop: test, if -> done | find, if -> add | step, jump -> loop | add | done
+  const int loop = int(test.out.size() + 5 + find.out.size() + 5 + step.out.size() + 5);
+  As2 all;
+  all.out = init.out;
+  all.out.insert(all.out.end(), test.out.begin(), test.out.end());
+  all.Jump(kIf, int(find.out.size() + 5 + step.out.size() + 5 + add.out.size()));
+  all.out.insert(all.out.end(), find.out.begin(), find.out.end());
+  all.Jump(kIf, int(step.out.size() + 5));
+  all.out.insert(all.out.end(), step.out.begin(), step.out.end());
+  all.Jump(kJump, -loop);
+  all.out.insert(all.out.end(), add.out.begin(), add.out.end());
+  return all.out;
+}
+
+// What was done comes back in `storage` and `camera`; `swf` is changed only when all that was asked for could be.
+bool PatchMainMenu(std::vector<uint8_t> &swf_in, const Assets &assets, std::string &note, bool &storage, bool &camera) {
+  storage = camera = false;
+  std::vector<uint8_t> swf = swf_in;
   if (swf.size() < 64 || std::memcmp(swf.data(), "GFX", 3) != 0) {
     note = "ui_mainmenu.swf is not a GFX file";
     return false;
@@ -673,22 +861,8 @@ bool PatchMainMenu(std::vector<uint8_t> &swf, std::string &note) {
     note = "ui_mainmenu.swf: the constants are not the expected ones";
     return false;
   }
-  // The test.
-  std::vector<uint8_t> test;
-  if (id_index < 256) {
-    const uint8_t push_id[] = {0x96, 0x04, 0x00, 0x04, 0x08, 0x08, uint8_t(id_index)};  // push register 8, "ID"
-    test.assign(push_id, push_id + sizeof(push_id));
-  } else {
-    const uint8_t push_id[] = {0x96, 0x05, 0x00, 0x04, 0x08, 0x09, uint8_t(id_index), uint8_t(id_index >> 8)};
-    test.assign(push_id, push_id + sizeof(push_id));
-  }
-  const uint8_t rest[] = {0x4E,                                                  // get member
-                          0x96, 0x05, 0x00, 0x07, uint8_t(kStorageItem), 0, 0, 0,  // push 56
-                          0x49,                                                  // equals
-                          0x9D, 0x02, 0x00, 16, 0};                              // if: over the push, the call, the pop
-  test.insert(test.end(), rest, rest + sizeof(rest));
-  const int grow = int(test.size());
-  // What holds the point or jumps across it.
+  // DataFilled's code: the function that holds the push (the innermost one).
+  size_t function = 0;
   for (size_t a = code; a < end;) {
     const uint8_t op = swf[a];
     size_t body = a + 1, size = 0;
@@ -700,45 +874,43 @@ bool PatchMainMenu(std::vector<uint8_t> &swf, std::string &note) {
     }
     if (body + size > end)
       break;
-    if ((op == 0x9B || op == 0x8E) && size >= 2) {  // a function: its code follows, its size the record's last word
+    if ((op == 0x9B || op == 0x8E) && size >= 2) {
       const size_t code_size = Le16(swf.data() + body + size - 2), first = body + size;
-      if (first <= at && at < first + code_size) {
-        if (code_size + grow > 0xFFFF) {
-          note = "ui_mainmenu.swf: the function is too long";
-          return false;
-        }
-        PutLe16(swf.data() + body + size - 2, uint32_t(code_size + grow));
-      }
-    } else if (op == 0x94 || op == 0x8F) {  // with / try: none around the list's loop
-      size_t region = 0;
-      if (op == 0x94 && size >= 2)
-        region = Le16(swf.data() + body);
-      else if (size >= 7)
-        region = size_t(Le16(swf.data() + body + 1)) + Le16(swf.data() + body + 3) + Le16(swf.data() + body + 5);
-      if (body + size <= at && at < body + size + region) {
-        note = "ui_mainmenu.swf: the list's loop is inside a with or try block";
-        return false;
-      }
-    } else if ((op == 0x99 || op == 0x9D) && size == 2) {  // jump / if
-      const size_t next = body + 2;
-      const int offset = int16_t(Le16(swf.data() + body));
-      const long target = long(next) + offset;
-      int moved = offset;
-      if (next <= at && target > long(at))
-        moved += grow;
-      else if (a >= at && target <= long(at))
-        moved -= grow;
-      if (moved < -32768 || moved > 32767) {
-        note = "ui_mainmenu.swf: a jump is too long";
-        return false;
-      }
-      PutLe16(swf.data() + body, uint32_t(uint16_t(int16_t(moved))));
+      if (first <= at && at < first + code_size)
+        function = first;
     }
     a = body + size;
   }
-  PutLe32(swf.data() + tag_header + 2, uint32_t(tag_size + grow));
-  PutLe32(swf.data() + 4, uint32_t(gfx + grow));
-  swf.insert(swf.begin() + at, test.begin(), test.end());
+  if (!assets.storage_item) {
+    // The test.
+    std::vector<uint8_t> test;
+    if (id_index < 256) {
+      const uint8_t push_id[] = {0x96, 0x04, 0x00, 0x04, 0x08, 0x08, uint8_t(id_index)};  // push register 8, "ID"
+      test.assign(push_id, push_id + sizeof(push_id));
+    } else {
+      const uint8_t push_id[] = {0x96, 0x05, 0x00, 0x04, 0x08, 0x09, uint8_t(id_index), uint8_t(id_index >> 8)};
+      test.assign(push_id, push_id + sizeof(push_id));
+    }
+    const uint8_t rest[] = {0x4E,                                                  // get member
+                            0x96, 0x05, 0x00, 0x07, uint8_t(kStorageItem), 0, 0, 0,  // push 56
+                            0x49,                                                  // equals
+                            0x9D, 0x02, 0x00, 16, 0};                              // if: over the push, the call, the pop
+    test.insert(test.end(), rest, rest + sizeof(rest));
+    if (!InsertActions(swf, tag_header, tag_data, tag_size, at, test, note))
+      return false;
+    storage = true;
+  }
+  if (assets.camera_rows) {
+    if (!function) {
+      note = "ui_mainmenu.swf: the list's push is not inside a function";
+      return false;
+    }
+    // At the function's first action (before the push: the storage test above did not move it).
+    if (!InsertActions(swf, tag_header, tag_data, tag_size, function, CameraRows(assets), note))
+      return false;
+    camera = true;
+  }
+  swf_in.swap(swf);
   return true;
 }
 
@@ -899,11 +1071,15 @@ bool BuildPack0Patch(const ReadFn &read, uint64_t file_size, const Assets &asset
       else
         note(why);
     }
-    if (is_menu && !assets.storage_item) {
-      if (PatchMainMenu(data, why))
-        out.menu = any = resized = true;
-      else
+    if (is_menu && (!assets.storage_item || assets.camera_rows)) {
+      bool storage = false, camera = false;
+      if (PatchMainMenu(data, assets, why, storage, camera)) {
+        any = resized = true;
+        out.menu = storage;
+        out.camera = camera;
+      } else {
         note(why);
+      }
     }
     if (!any)
       continue;

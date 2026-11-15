@@ -161,6 +161,7 @@ set(TW2DE_SOURCES
     src/cpu/tw2de_render_frame.cpp  # TW2 (2026-11-12): the render thread's refresh frames (the black frames)
     src/cpu/tw2de_native_reverb.cpp  # TW2 (2026-11-14): FMOD's reverb (sub_82968720) as native code
     src/cpu/tw2de_scene_size.cpp  # TW2 (2026-11-14): the game's 3D scene at another size (sub_82EF0328)
+    src/cpu/tw2de_camera_speed.cpp  # TW2 (2026-11-16): the camera's input from the right stick scaled (sub_82E7A208)
     src/cpu/tw2de_job_check.cpp  # TW2 (2026-11-12): diagnostic of the job worker crash (tw2de_diag_jobs)
     src/cpu/tw2de_tw2_stubs.cpp  # TW2 (2026-11-12): the names the renderer uses from the files left out
     src/cpu/tw2de_images.cpp  # TW2 (2026-11-12): kept (no hooks; inactive without a language pack / a matching texture)
@@ -293,7 +294,7 @@ endif()
 rexglue_switch_add_nro(tw2de
     NAME "TW2DE NX"
     AUTHOR "recomp-nx"
-    VERSION "0.1.0"
+    VERSION "0.1.1"
     ${TW2DE_ICON_ARG}
     ${TW2DE_ROMFS_ARG})
 

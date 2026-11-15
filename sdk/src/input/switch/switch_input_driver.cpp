@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -37,25 +36,6 @@ REXCVAR_DEFINE_BOOL(input_xbox_layout, false, "Input",
 // Route recording for unattended test runs: the game's own pad input, written and played back here.
 // MINUS on pad 1 marks the start (and, while recording, the end), so the load time before the route does not
 // matter; the game does not see MINUS while either is set. Lines: "ms<TAB>npad buttons (hex)<TAB>lx ly rx ry".
-// TW2 (2026-11-14, the boot menu's "Camera speed"): the right stick's deflection beyond the XInput dead zone (8689)
-// times this percent, the direction kept: the stick starts to act where it did, and its full tilt gives that share of
-// the game's turning speed. 100: untouched.
-REXCVAR_DEFINE_INT32(switch_right_stick_percent, 100, "Input",
-                     "Switch: the right stick's range beyond the dead zone, in percent (the camera's turning speed "
-                     "in games that have no setting for it)")
-    .range(10, 100);
-static void ScaleRightStick(int16_t& x, int16_t& y) {
-  const int32_t percent = REXCVAR_GET(switch_right_stick_percent);
-  if (percent >= 100)
-    return;
-  constexpr float kDeadZone = 8689.0f;  // XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE
-  const float fx = float(x), fy = float(y), length = std::sqrt(fx * fx + fy * fy);
-  if (length <= kDeadZone)
-    return;
-  const float k = (kDeadZone + (length - kDeadZone) * float(percent) * 0.01f) / length;
-  x = int16_t(std::lround(fx * k));
-  y = int16_t(std::lround(fy * k));
-}
 REXCVAR_DEFINE_STRING(input_record, "", "Input",
                       "Record pad 1 to this file (e.g. sdmc:/switch/masseffect-nx/route.tsv) between two MINUS presses");
 REXCVAR_DEFINE_STRING(input_play, "", "Input",
@@ -443,12 +423,8 @@ void SwitchInputDriver::Poll(size_t index) {
   // HID reports up as positive Y, like XInput, so no inversion is needed.
   gamepad.thumb_lx = ClampStickAxis(left.x);
   gamepad.thumb_ly = ClampStickAxis(left.y);
-  {
-    int16_t rx = ClampStickAxis(right.x), ry = ClampStickAxis(right.y);
-    ScaleRightStick(rx, ry);  // TW2 (2026-11-14): switch_right_stick_percent
-    gamepad.thumb_rx = rx;
-    gamepad.thumb_ry = ry;
-  }
+  gamepad.thumb_rx = ClampStickAxis(right.x);
+  gamepad.thumb_ry = ClampStickAxis(right.y);
 
   if (std::memcmp(&gamepad, &slot.state.gamepad, sizeof(gamepad)) != 0) {
     slot.state.gamepad = gamepad;

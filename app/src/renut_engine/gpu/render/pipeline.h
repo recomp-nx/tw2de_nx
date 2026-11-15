@@ -86,6 +86,8 @@ struct PipelineKey {
   // sample i; 0 = all (single-sample targets, or a mask with every sample). The game writes the two samples of its 2x
   // target separately (a full-screen quad per sample, mask 0x1111 << i); drawn into both, one overwrote the other.
   uint32_t sample_mask;
+  // TW2 (2026-11-16): bits 8-10 are specialization constant 914's (render/draw.cpp sets them, render/pipeline.cpp
+  // gives the shaders the constant). The pipeline list's record form leaves the whole field out.
   uint32_t reserved;  // 0 (the key is compared and hashed as bytes); bits 0-2: tw2de_renut_ab_target's off halves
 };
 

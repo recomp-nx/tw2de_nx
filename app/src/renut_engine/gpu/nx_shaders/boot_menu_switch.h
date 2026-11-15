@@ -3,6 +3,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 #include <switch.h>
 
@@ -13,6 +14,12 @@ namespace renut::nxs {
 // settings (the options they set, over tw2de.toml's). Closing the software from HOME in the menu exits.
 // user_data_root: the runtime's (tw2de 2026-10-28: the achievement lists read its achievements/ folder).
 void RunBootMenu(const std::filesystem::path &user_data_root);
+
+// TW2 (2026-11-16): the camera's speed is set in the game's own Control options (cpu/tw2de_camera_speed.cpp) and
+// kept in this menu's file: its two values written there (0-100, left-right and up-down).
+void SaveCameraSpeed(int x_percent, int y_percent);
+// The two rows' names in the game's language (its code: "PL", "EN", ...; another: English), axis 0 X, 1 Y.
+std::string CameraSpeedLabel(const std::string &game_code, int axis);
 
 // tw2de (2026-11-07): whether the pre-pass and boot menu screens should be 1920x1080: docked (Reverse-NX's mode when
 // it rules) on a 1080p display resolution, as the game's output (render/graphics_options.cpp; tw2de_diag_output 1:

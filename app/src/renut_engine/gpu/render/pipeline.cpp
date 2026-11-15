@@ -752,6 +752,14 @@ struct PipelineList {
   }
 
   void Append(const PipelineKey &key, uint64_t hash, const HostVertexLayout &layout) {
+    // TW2 (2026-11-16): the record form leaves key.reserved out (constant 914's bits, the A/B halves, the upscale
+    // pass's mark), so a key with reserved bits is listed as the key without them, once: by its own hash it was
+    // never among the file's hashes at the next start, and every session appended its record again.
+    if (key.reserved) {
+      PipelineKey plain = key;
+      plain.reserved = 0;
+      hash = HashKey(plain);
+    }
     if (failed || !listed.insert(hash).second)
       return;
     if (!out) {

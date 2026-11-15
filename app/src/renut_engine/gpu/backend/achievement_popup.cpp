@@ -176,11 +176,21 @@ void WriteNamesLocked() {
     rex::system::XLanguage id;
     const char *key;  // the boot menu's language keys
   };
+  // TW2 (2026-11-16, the user: with Polski chosen the boot menu's achievements stayed English): every language the
+  // boot menu has a key for and the Xbox 360 a string table. This game's data has English, German, French, Spanish,
+  // Italian, Polish, Russian and Traditional Chinese. "chinese" is the simplified table when there is one, else the
+  // traditional one (insert keeps the first).
   static constexpr Lang kLangs[] = {{rex::system::XLanguage::kEnglish, "english"},
                                     {rex::system::XLanguage::kGerman, "german"},
                                     {rex::system::XLanguage::kFrench, "french"},
                                     {rex::system::XLanguage::kSpanish, "spanish"},
-                                    {rex::system::XLanguage::kItalian, "italian"}};
+                                    {rex::system::XLanguage::kItalian, "italian"},
+                                    {rex::system::XLanguage::kPolish, "polish"},
+                                    {rex::system::XLanguage::kRussian, "russian"},
+                                    {rex::system::XLanguage::kJapanese, "japanese"},
+                                    {rex::system::XLanguage::kSChinese, "chinese"},
+                                    {rex::system::XLanguage::kTChinese, "chinese"},
+                                    {rex::system::XLanguage::kTurkish, "turkish"}};
   toml::table root;
   root.insert("title_id", fmt::format("{:08X}", ks->title_id()));
   toml::array list;

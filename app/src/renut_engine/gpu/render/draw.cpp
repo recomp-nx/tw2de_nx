@@ -9846,6 +9846,10 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   struct PipelineReuse {
     uint64_t seq = 0, lookups = 0, epoch = 0;
     plume::RenderPipeline *pipeline = nullptr;
+    // TW2 (2026-11-16): the key's reserved bits the pipeline was looked up with. Constant 914's bits come from the
+    // draw's textures and its motion word, which are not among the things 'reused' compares: another value, another
+    // pipeline (a draw after one without the bits took that one's pipeline, and its extras were not applied).
+    u32 reserved = 0;
   };
   static PipelineReuse preuse;
   plume::RenderPipeline *pipeline = nullptr;
@@ -9857,7 +9861,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   rtw_key.End();
   const uint64_t prebuild_epoch = PrebuildEpochLocked();
   if (reused && preuse.pipeline && preuse.seq + 1 == hint.seq && preuse.lookups == PipelineLookupsLocked() &&
-      preuse.epoch == prebuild_epoch) {
+      preuse.epoch == prebuild_epoch && preuse.reserved == key.reserved) {
     g_chain_stats.pipeline += g_chain_stats_on;
     pipeline = preuse.pipeline;
     if (reuse_verify) {
@@ -9875,7 +9879,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
         rtw::Timed(rtw::kPipeline, [&] { return GetPipelineLocked(key, {host_vs, host_ps, &declaration->layout}); });
   }
   if (reuse_on)
-    preuse = {hint.seq, PipelineLookupsLocked(), prebuild_epoch, pipeline};
+    preuse = {hint.seq, PipelineLookupsLocked(), prebuild_epoch, pipeline, key.reserved};
   // tw2de (2026-11-06, tw2de_motion_vectors): a scene draw with its motion (MotionPrepareLocked), not blended
   // and writing depth, writes the motion target (BindTargets); blended ones (effects) leave it.
   const bool motion_write = (sc.motion & 1u) && key.color_count &&

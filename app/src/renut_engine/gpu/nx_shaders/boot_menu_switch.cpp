@@ -67,7 +67,8 @@
 #include <toml++/toml.hpp>  // tw2de (2026-10-28): the achievement lists
 
 REXCVAR_DECLARE(int32_t, tw2de_frame_interval);        // renut_engine/frame_interval.cpp
-REXCVAR_DECLARE(int32_t, switch_right_stick_percent);  // sdk/src/input/switch/switch_input_driver.cpp
+REXCVAR_DECLARE(int32_t, tw2de_camera_percent_x);  // cpu/tw2de_camera_speed.cpp
+REXCVAR_DECLARE(int32_t, tw2de_camera_percent_y);
 REXCVAR_DECLARE(int32_t, tw2de_scene_width);   // cpu/tw2de_scene_size.cpp
 REXCVAR_DECLARE(int32_t, tw2de_scene_height);
 REXCVAR_DECLARE(bool, tw2de_render_720p);              // cpu/tw2de_render_resolution.cpp
@@ -120,7 +121,9 @@ constexpr const char *kModeKeys[] = {"handheld", "docked"};
 
 struct Settings {
   int language = 0;   // index into Choices() (kLanguages, then the language packs)
-  int camera = 100;   // TW2 (2026-11-14): the right stick's range in percent (30-100), the "Camera speed" row
+  // TW2 (2026-11-16): the camera's speed left-right and up-down, in percent: set in the game's own Control
+  // options (cpu/tw2de_camera_speed.cpp), only kept in this menu's file.
+  int camera_x = 100, camera_y = 100;
   Profile mode[2];    // kHandheld, kDocked: the one of the mode the console starts the game in is applied
 };
 
@@ -145,28 +148,16 @@ constexpr Language kLanguages[] = {
 };
 constexpr int kLanguageCount = int(sizeof(kLanguages) / sizeof(kLanguages[0]));
 
-// TW2 (2026-11-14, the user: the camera turns too fast and the game has no setting for it): the "Camera speed" row.
-// The right stick's range in percent (switch_right_stick_percent, sdk/src/input/switch/switch_input_driver.cpp).
-constexpr int kCameraMin = 30, kCameraStep = 10;
-struct CamStrings {
-  const char *row, *note;
+// TW2 (2026-11-14, the user: the camera turns too fast and the game has no setting for it; 2026-11-16: the setting
+// is two sliders in the game's own Control options, cpu/tw2de_camera_speed.cpp, and no row of this menu): those
+// rows' name in each language (kLanguages' order; " X" and " Y" are added).
+constexpr const char *kCameraNames[] = {
+    "Camera speed",    "Kamerageschwindigkeit", "Vitesse de la caméra", "Velocidad de la cámara",
+    "Velocità della telecamera", "Szybkość kamery", "Rychlost kamery", "Kamera sebessége",
+    "Скорость камеры", "カメラ速度",            "镜头速度",             "Kamera hızı",
 };
-constexpr CamStrings kCamStrings[] = {  // kLanguages' order
-    {"Camera speed", "How fast the right stick turns the camera (100%: the game's own speed)."},
-    {"Kamerageschwindigkeit", "Wie schnell der rechte Stick die Kamera dreht (100 %: das Tempo des Spiels)."},
-    {"Vitesse de la caméra", "Vitesse de rotation de la caméra avec le stick droit (100 % : celle du jeu)."},
-    {"Velocidad de la cámara", "Rapidez con la que el stick derecho gira la cámara (100 %: la del juego)."},
-    {"Velocità della telecamera", "Quanto velocemente la levetta destra ruota la telecamera (100%: quella del gioco)."},
-    {"Szybkość kamery", "Jak szybko prawa gałka obraca kamerę (100%: szybkość z gry)."},
-    {"Rychlost kamery", "Jak rychle pravá páčka otáčí kamerou (100 %: rychlost ze hry)."},
-    {"Kamera sebessége", "Milyen gyorsan forgatja a jobb kar a kamerát (100%: a játék saját sebessége)."},
-    {"Скорость камеры", "Насколько быстро правый стик поворачивает камеру (100%: скорость самой игры)."},
-    {"カメラ速度", "右スティックでカメラが回る速さ（100%：ゲーム本来の速さ）。"},
-    {"镜头速度", "右摇杆转动镜头的速度（100%：游戏原本的速度）。"},
-    {"Kamera hızı", "Sağ çubuğun kamerayı ne kadar hızlı döndürdüğü (%100: oyunun kendi hızı)."},
-};
-static_assert(sizeof(kCamStrings) / sizeof(kCamStrings[0]) == sizeof(kLanguages) / sizeof(kLanguages[0]),
-              "a CamStrings for each language");
+static_assert(sizeof(kCameraNames) / sizeof(kCameraNames[0]) == sizeof(kLanguages) / sizeof(kLanguages[0]),
+              "a camera row name for each language");
 // TW2 (2026-11-14): the Resolution row's note at 1280x720 (kLanguages' order). Measured in the Tutorial scene:
 // GPU 34.7 ms a frame against 33.2 at the game's own 1280x672.
 constexpr const char *kRes720Notes[] = {
@@ -1040,8 +1031,12 @@ bool Load(Settings &s) {
           s.language = i;
       continue;
     }
-    if (key == "camera_speed") {  // TW2 (2026-11-14)
-      s.camera = std::clamp((std::atoi(value.c_str()) + kCameraStep / 2) / kCameraStep * kCameraStep, kCameraMin, 100);
+    if (key == "camera_speed") {  // TW2 (2026-11-14): the one value of the files before 2026-11-16, for both
+      s.camera_x = s.camera_y = std::clamp(std::atoi(value.c_str()), 0, 100);
+      continue;
+    }
+    if (key == "camera_speed_x" || key == "camera_speed_y") {  // TW2 (2026-11-16)
+      (key.back() == 'x' ? s.camera_x : s.camera_y) = std::clamp(std::atoi(value.c_str()), 0, 100);
       continue;
     }
     // tw2de (2026-11-07): "handheld_aa", "docked_aa", ...; a key without the prefix (the files before the two
@@ -1086,8 +1081,9 @@ void Save(const Settings &s) {
                "# tw2de boot menu settings. Hold A while the game starts to open the\n"
                "# menu again; delete this file to see it at the next start.\n"
                "language = %s\n"
-               "camera_speed = %d\n",
-               g_choices[s.language].key.c_str(), s.camera);
+               "camera_speed_x = %d\n"
+               "camera_speed_y = %d\n",
+               g_choices[s.language].key.c_str(), s.camera_x, s.camera_y);
   for (int m = 0; m < 2; m++) {
     const Profile &p = s.mode[m];
     const char *k = kModeKeys[m];
@@ -1135,7 +1131,8 @@ void Apply(const Settings &settings) {
   REXCVAR_SET(tw2de_lang, language.pack);  // tw2de (2026-10-25): a language pack, or none
   REXCVAR_SET(tw2de_game_language, language.game_code);  // TW2 (2026-11-12): cpu/tw2de_language.cpp
   REXCVAR_SET(tw2de_frame_interval, int32_t(s.interval));
-  REXCVAR_SET(switch_right_stick_percent, int32_t(settings.camera));  // TW2 (2026-11-14): "Camera speed"
+  REXCVAR_SET(tw2de_camera_percent_x, int32_t(settings.camera_x));  // TW2 (2026-11-16)
+  REXCVAR_SET(tw2de_camera_percent_y, int32_t(settings.camera_y));
   REXCVAR_SET(tw2de_render_720p, false);
   if (kGameVideoFixed && !kGameResolutionFixed && REXCVAR_GET(tw2de_scene_width) == 0) {
     // TW2 (2026-11-14): the game's viewport at the row's size; the "1280x720" row is the game's own (0: untouched).
@@ -1333,7 +1330,7 @@ std::string IntervalText(const Strings &t, int n) {
   return text;
 }
 
-enum Row { kRowLanguage, kRowHandheld, kRowDocked, kRowCamera, kRowAchievements, kRowReset, kRowStart, kRowCount };
+enum Row { kRowLanguage, kRowHandheld, kRowDocked, kRowAchievements, kRowReset, kRowStart, kRowCount };
 // tw2de (2026-11-07): the rows of a mode's settings page.
 enum SubRow { kSubInterval, kSubResolution, kSubAa, kSubUpscaler, kSubDynres };
 int SubRowCount(int) { return 5; }
@@ -1506,9 +1503,11 @@ bool ShowMenu(Settings &s, PadState &pad) {
       // tw2de (2026-10-25): "Reset settings": every setting back to its default; the language stays (the menu
       // would otherwise switch to English under the player).
       if ((down & HidNpadButton_A) && selected == kRowReset) {
-        const int language = s.language;
+        const int language = s.language, camera_x = s.camera_x, camera_y = s.camera_y;
         s = Settings{};
         s.language = language;
+        s.camera_x = camera_x;  // TW2 (2026-11-16): the game's own options, not this menu's
+        s.camera_y = camera_y;
         dirty = true;
       }
       const int step = (down & HidNpadButton_AnyRight) ? 1 : (down & HidNpadButton_AnyLeft) ? -1 : 0;
@@ -1519,7 +1518,6 @@ bool ShowMenu(Settings &s, PadState &pad) {
           s.language = (s.language + n + step) % n;
           break;
         }
-        case kRowCamera: s.camera = std::clamp(s.camera + kCameraStep * step, kCameraMin, 100); break;
         default: break;
         }
         dirty = true;
@@ -1645,8 +1643,6 @@ bool ShowMenu(Settings &s, PadState &pad) {
         m.rows.push_back({t.language, g_choices[s.language].name, true});
         m.rows.push_back({t.handheld, "", true});  // tw2de (2026-11-07)
         m.rows.push_back({t.docked, "", true});
-        const CamStrings &cam = kCamStrings[std::clamp(g_choices[s.language].base, 0, kLanguageCount - 1)];
-        m.rows.push_back({cam.row, std::to_string(s.camera) + "%", true});  // TW2 (2026-11-14)
         m.rows.push_back({g_choices[s.language].ach.row, "", true});  // tw2de (2026-10-28)
         m.rows.push_back({t.reset, "", true});
         m.rows.push_back({t.start, "", true});
@@ -1659,7 +1655,6 @@ bool ShowMenu(Settings &s, PadState &pad) {
         case kRowDocked:
           m.note = std::string(t.note_docked) + (docked_now == kDocked ? t.current : "");
           break;
-        case kRowCamera: m.note = cam.note; break;
         case kRowAchievements: m.note = g_choices[s.language].ach.note_row; break;
         case kRowReset: m.note = t.note_reset; break;
         default: m.note = t.note_start; break;
@@ -1787,6 +1782,27 @@ static int SystemLanguageChoice() {
             found = i;
   REXLOG_INFO("[menu] console language {}: {}", tag, g_choices[found].key);
   return found;
+}
+
+// TW2 (2026-11-16): the game's Control options have the camera's speed (cpu/tw2de_camera_speed.cpp): its two values
+// into the settings file, the rest of it as it is.
+void SaveCameraSpeed(int x_percent, int y_percent) {
+  if (g_choices.empty())
+    return;  // before the boot menu
+  Settings s;
+  Load(s);
+  s.camera_x = std::clamp(x_percent, 0, 100);
+  s.camera_y = std::clamp(y_percent, 0, 100);
+  Save(s);
+  REXLOG_INFO("[menu] the camera's speed kept: {} % left and right, {} % up and down", s.camera_x, s.camera_y);
+}
+
+std::string CameraSpeedLabel(const std::string &game_code, int axis) {
+  int menu = 0;
+  for (const GameLanguage &l : kGameLanguages)
+    if (game_code == l.code)
+      menu = l.menu;
+  return std::string(kCameraNames[std::clamp(menu, 0, kLanguageCount - 1)]) + (axis ? " Y" : " X");
 }
 
 void RunBootMenu(const std::filesystem::path &user_data_root) {

@@ -20,7 +20,15 @@ struct Assets {
   Image pad;    // tex/tw2_pad.png: 512x358
   bool xbox_layout = false;  // input_xbox_layout: the face buttons by position (the game's A is the Switch's B)
   bool storage_item = false;  // keep the options menu's "select storage device"
+  // TW2 (2026-11-16): two slider rows after the control options' own (the camera's speed, left-right and up-down),
+  // with these names (UTF-8, in the game's language). cpu/tw2de_camera_speed.cpp answers them.
+  bool camera_rows = false;
+  std::string camera_label_x, camera_label_y;
 };
+
+// The two rows' ids (the game's own are below 100) and what ui_mainmenu.swf asks the game for their values with.
+constexpr int kCameraItemX = 9001, kCameraItemY = 9002;
+constexpr char kCameraValueCall[] = "Tw2CamSpeed";
 
 // `data` at `offset` of the patched view; or, with no data, `source_size` bytes of the archive itself from `source`.
 struct Range {
@@ -37,6 +45,7 @@ struct Result {
   int swf_files = 0;          // .swf files changed
   bool pad = false;           // the controller picture
   bool menu = false;          // the options menu without its storage device item
+  bool camera = false;        // the control options with the two camera speed rows
   std::string notes;          // what was left as it is, and why
 };
 
