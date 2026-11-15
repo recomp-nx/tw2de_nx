@@ -57,8 +57,19 @@ REXCVAR_DEFINE_INT32(tw2de_diag_drs_sweep, 0, "Game/Diagnostics",
     .range(0, 30)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// TW2 (2026-11-15, the lines at the screen's edge at a level change).
+REXCVAR_DEFINE_INT32(tw2de_diag_drs_dump, 0, "Game/Diagnostics",
+                     "Test (2026-11-15, with tw2de_frame_dump): the frame of dynamic resolution's Nth level change "
+                     "and the one after it are dumped, and so are those of the changes that follow while no dump "
+                     "runs (twelve dumps at most). 0 off")
+    .range(0, 1000)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 namespace tw2de {
 uint32_t RenderHeight();  // cpu/tw2de_render_resolution.cpp
+namespace renut_gpu {
+void RequestFrameDump();  // renut_engine/gpu/tw2de_renut_tuning.h
+}
 }
 
 namespace renut::gpu {
@@ -229,6 +240,14 @@ void DrsFrameStartLocked() {
     if (g.applied >= 0 && was && g.gameplay && g.changes++ < 400)  // the controller's (not gameplay's on / off)
       REXLOG_INFO("[drs] {} -> {} lines (GPU load {:.0f}% of {:.1f} ms)", 9 * LevelM(g.applied), 9 * m, g.last_avg,
                   BudgetMs());
+    // tw2de_diag_drs_dump: this frame (the first of the new level) and the next.
+    static const int dump_from = REXCVAR_GET(tw2de_diag_drs_dump);
+    static int seen = 0, asked = 0;
+    if (dump_from > 0 && g.applied >= 0 && was && g.gameplay && ++seen >= dump_from && asked < 12) {
+      ++asked;
+      REXLOG_INFO("[drs] frame dump asked for change {}: {} -> {} lines", seen, 9 * LevelM(g.applied), 9 * m);
+      tw2de::renut_gpu::RequestFrameDump();
+    }
     g.applied = level;
   }
   g.drawn_sum += 9.0 * m;

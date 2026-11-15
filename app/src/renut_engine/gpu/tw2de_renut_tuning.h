@@ -348,6 +348,10 @@ void ResolveTraceFrameStart();  // tw2de_renut_diag_resolve_trace: the render th
 // TW2 (2026-11-12): a frame dump of the frame starting now (render thread, queued in order: the black frames' refresh
 // frame, cpu/tw2de_diag_render.cpp), when tw2de_frame_dump is on and no dump runs.
 void StartFrameDumpNow();
+// TW2 (2026-11-15, tw2de_diag_drs_dump): a frame dump of the frame whose boundary is being handled (asked before
+// ResolveTraceFrameStart in the same boundary: render/dynamic_resolution.cpp), when tw2de_frame_dump is on and no
+// dump runs.
+void RequestFrameDump();
 // tw2de (2026-10-19, render-thread proposal 22): inline (read per resolve, per bind and per target change).
 extern std::atomic<bool> g_trace_frame;
 inline bool ResolveTraceOn() { return g_trace_frame.load(std::memory_order_relaxed); }  // this frame is traced  // tw2de_renut_diag_build_delay_ms (a test): a wait before every pipeline build

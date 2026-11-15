@@ -12280,11 +12280,15 @@ bool ColourMaterialiseLocked(HostTexture &d) {
     ok = same && DrawResolveCopy(source, &d, rect, 0, 0, -1, 0);
   } else if (d.held && d.held_current) {
     d.held_current = false;
-    // The taken image as the target it was taken from, for DrawResolveCopy (the console's scale: the host's size).
+    // The taken image as the target it was taken from, for DrawResolveCopy: at its host size, scale 1.
+    // TW2 (2026-11-15, the lines at the screen's edge at a dynamic-resolution level change): not d.scale. With one of
+    // dynamic resolution's levels as the scale, SwapDepthImageLocked took the host size times the scale as the
+    // image's size (592x311 became 548x288), so the next take found the image "of another size", retired it and
+    // made a new one.
     HostSurface image;
     image.width = d.held->host_width;
     image.height = d.held->host_height;
-    image.scale = d.scale;
+    image.scale = RenderScale{};
     image.depth = false;
     image.format = d.held->format;
     image.samples = d.held->samples;
@@ -12307,9 +12311,18 @@ bool ColourMaterialiseLocked(HostTexture &d) {
 // The destination takes the target's image; the target takes the destination's previous one (or a new one, cleared
 // when it is first bound).
 bool ColourTakeLocked(HostTexture &d, HostSurface &s) {
+  const uint64_t diag_target = s.generation, diag_spare = d.held ? d.held->generation : 0;  // (frame dump's note)
+  bool diag_retired = false;
   if (d.held && (!d.held->colour || d.held->host_width != s.scale.Size(s.width) ||
                  d.held->host_height != s.scale.Size(s.height) || d.held->format != s.format ||
                  d.held->samples != s.samples)) {
+    diag_retired = true;
+    if (g_dump.active)
+      FrameDumpNoteLocked(fmt::format("  [take] spare {} of {:08X} retired: colour {} {}x{} format {} samples {}; target "
+                                      "{}x{} format {} samples {}", diag_spare, d.guest_va, d.held->colour,
+                                      d.held->host_width, d.held->host_height, u32(d.held->format),
+                                      u32(d.held->samples), s.scale.Size(s.width), s.scale.Size(s.height),
+                                      u32(s.format), u32(s.samples)));
     RetireDepthImageLocked(*d.held);
     d.held.reset();
   }
@@ -12326,6 +12339,10 @@ bool ColourTakeLocked(HostTexture &d, HostSurface &s) {
   SwapDepthImageLocked(s, *d.held);
   d.held_current = true;
   ++g_texture_epoch;
+  if (g_dump.active)
+    FrameDumpNoteLocked(fmt::format("  [take] {:08X} takes image {} of target {:08X}; the target goes on in {} ({}{})",
+                                    d.guest_va, diag_target, s.guest_va, s.generation,
+                                    fresh ? "new" : "the spare", diag_retired ? ", the spare was retired" : ""));
   static const bool poison = REXCVAR_GET(tw2de_diag_colour_handover_poison);
   if (fresh || poison) {
     s.needs_clear = true;  // BindTargets: a new image starts transparent black (or, the test, any given one magenta)
@@ -12355,6 +12372,10 @@ void ColourHandOverBeforeWriteLocked(HostSurface *surface, int take) {
     }
   }
   const int why = g_colour_mat_why ? g_colour_mat_why : 1;
+  if (g_dump.active)
+    FrameDumpNoteLocked(fmt::format("  [ho] before a write of {:08X} image {} writes {}: take {}, {} holders, taker "
+                                    "{:08X}, why {}", surface->guest_va, surface->generation, surface->writes, take,
+                                    holders.size(), taker ? taker->guest_va : 0, why));
   for (HostTexture *d : holders)
     if (d != taker) {
       if (LookAheadDeadLocked(*d))  // TW2 (2026-11-14, tw2de_lookahead)
@@ -12606,9 +12627,20 @@ int ColourPartPrepareLocked(HostSurface *c, const plume::RenderRect &rect) {
     if (!a->held_current || LookAheadDeadLocked(*a)) {
       g_colour_part.a = a;
       g_colour_part.twin_generation = twin->held_generation;
+      if (g_dump.active)
+        FrameDumpNoteLocked(fmt::format("  [part] prepare {:08X} image {}: 5 (holder {:08X}, twin {:08X} holding {})",
+                                        c->guest_va, c->generation, b->guest_va, a->guest_va, twin->held_generation));
       return 5;
     }
   }
+  if (g_dump.active)
+    FrameDumpNoteLocked(fmt::format("  [part] prepare {:08X} image {}: 6 (holder {:08X}; twin record: {})", c->guest_va,
+                                    c->generation, b->guest_va,
+                                    !twin ? std::string("none")
+                                          : fmt::format("holder {:08X} image {} writes {} / {} held {}",
+                                                        twin->holder ? twin->holder->guest_va : 0,
+                                                        twin->image_generation, twin->writes, c->writes,
+                                                        twin->held_generation)));
   return 6;
 }
 
@@ -12624,11 +12656,11 @@ bool DrawHeldIntoSurfaceLocked(HostTexture &d, HostSurface *to) {
   plume::RenderFramebuffer *framebuffer = GetFramebufferLocked(colors, 1, nullptr);
   if (!framebuffer)
     return false;
-  // The held image as a surface for its sample slot (as ColourMaterialiseLocked).
+  // The held image as a surface for its sample slot (as ColourMaterialiseLocked: its host size, scale 1).
   HostSurface image;
   image.width = d.held->host_width;
   image.height = d.held->host_height;
-  image.scale = d.scale;
+  image.scale = RenderScale{};
   image.depth = false;
   image.format = d.held->format;
   image.samples = d.held->samples;
@@ -12675,8 +12707,14 @@ void ColourPartBindLocked(HostSurface *c, int kind) {
     ColourHandOverBeforeWriteLocked(c, 0);
     return;
   }
+  const int diag_asked = kind;
   if (kind == 5 && (!a || !a->held || a->held_current || a->held->generation != g_colour_part.twin_generation))
     kind = 6;
+  if (g_dump.active)
+    FrameDumpNoteLocked(fmt::format("  [part] bind {:08X} image {}: asked {}, does {} (twin's image {}, holder's spare {})",
+                                    c->guest_va, c->generation, diag_asked, kind, a && a->held ? a->held->generation : 0,
+                                    b->held ? b->held->generation : 0));
+  const uint64_t twin_generation = g_colour_part.twin_generation;
   if (kind == 5)
     std::swap(a->held, b->held);  // B's spare is the equal image now; A keeps B's
   if (!ColourTakeLocked(*b, *c)) {
@@ -12686,12 +12724,23 @@ void ColourPartBindLocked(HostSurface *c, int kind) {
     ColourHandOverBeforeWriteLocked(c, 0);
     return;
   }
+  // TW2 (2026-11-15): 5 only when the target really goes on in the twin's image. In any other (the take made a new
+  // one: the twin's was retired) nothing outside the rect is defined: the picture is copied, as in 6. (Such an image
+  // was left as it came: undefined memory outside the bloom passes' corner, which the composite's taps at the
+  // corner's edge read: a bright line along the screen's bottom or right edge for a frame or two after a
+  // dynamic-resolution level change, when the images were new.)
+  if (kind == 5 && c->generation != twin_generation)
+    kind = 6;
   // T's image is the other one now; B holds the picture. Nothing is cleared: 5 needs what is outside the rect, 6
   // copies all of it.
   c->needs_clear = false;
   c->poison = false;
   if (kind == 6) {
-    if (!DrawHeldIntoSurfaceLocked(*b, c)) {
+    const bool diag_copied = DrawHeldIntoSurfaceLocked(*b, c);
+    if (g_dump.active)
+      FrameDumpNoteLocked(fmt::format("  [part] copy of image {} into {}: {}", b->held ? b->held->generation : 0,
+                                      c->generation, diag_copied ? "drawn" : "FAILED"));
+    if (!diag_copied) {
       static bool logged = false;
       if (!logged) {
         logged = true;
@@ -12739,6 +12788,9 @@ void ColourHandOverDrawStartLocked(const GuestDevice &device, const DrawCall &ca
       if (kind == -2)
         continue;  // no destination holds it any more
     }
+    if (g_dump.active)
+      FrameDumpNoteLocked(fmt::format("  [ho] draw into {:08X} image {} writes {} ({} holding it): kind {}, test {}",
+                                      c->guest_va, c->generation, c->writes, c->handed, kind, why));
     if (kind) {
       g_colour_take_pending[g_colour_take_pending_count++] = {c, kind};
       continue;

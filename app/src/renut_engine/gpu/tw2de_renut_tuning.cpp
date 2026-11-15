@@ -1,6 +1,7 @@
 // tw2de (2026-10-17): see tw2de_renut_tuning.h.
 #include "renut_engine/gpu/backend/render_thread.h"
 #include "renut_engine/gpu/backend/video.h"
+#include <utility>
 #include <rex/frame_latency.h>
 #include "renut_engine/display_sync.h"
 #include "renut_engine/gpu/tw2de_renut_tuning.h"
@@ -1520,9 +1521,13 @@ void StartFrameDumpNow() {
   REXLOG_INFO("[trace] frame start (requested by the game's refresh frame)");
 }
 
+static bool g_trace_asked = false;  // RequestFrameDump (render thread)
+void RequestFrameDump() { g_trace_asked = true; }
+
 void ResolveTraceFrameStart() {
   StallDumpOnRequest();
   const bool dump = REXCVAR_GET(tw2de_frame_dump);
+  const bool asked = std::exchange(g_trace_asked, false);  // one asked for while a dump runs is dropped
   if (!REXCVAR_GET(tw2de_renut_diag_resolve_trace) && !dump) {
     g_trace_frame.store(false, std::memory_order_relaxed);
     return;
@@ -1542,7 +1547,7 @@ void ResolveTraceFrameStart() {
     }
   } else if (dump) {
     // The frame dump: on ZL + ZR only, not every 30 s.
-    if (FrameDumpComboPressed()) {
+    if (FrameDumpComboPressed() || asked) {
       g_trace_frames_left = kDumpFrames;
       g_trace_seq.fetch_add(1, std::memory_order_relaxed);
       g_trace_frame.store(true, std::memory_order_relaxed);
