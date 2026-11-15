@@ -8257,6 +8257,14 @@ struct MotionState {
   uint64_t jittered = 0;
   float drawn_jitter[2] = {};
   bool jitter_mixed = false;
+  // TW2 (2026-11-15, the NPCs' moving arms ghosting with FSR 3.1): the 2D textures the scene draws' vertex shaders
+  // sample (the skinned meshes' bone rows: 768x256 floats at fetch slot 16, two textures the game fills in turn),
+  // this frame's ([cur]) and the last one's: guest address, texture word, size and format. MotionPrepareLocked.
+  struct VertexTexture {
+    u32 va = 0, word = 0, width = 0, height = 0, format = 0;
+  };
+  std::vector<VertexTexture> vertex_textures[2];
+  uint64_t vertex_previous = 0;  // this frame's scene draws that read a last frame's texture (the report's)
   // tw2de (2026-11-07, tw2de_diag_camera_steps): one big scene draw followed from frame to frame (its key), how
   // much its registers 8-11 (the game's world-view-projection rows) changed since last frame (sum of |differences|),
   // and the frame starts' times: a camera turning at a steady speed changes them by the same amount every frame.
@@ -8287,9 +8295,14 @@ void MotionFrameStartLocked() {
       RGPU_INFO("[motion] last frame: {} scene draws with last frame's constants, {} without", m.matched, m.unmatched);
     m.last_report = now;
   }
+  if (now == m.last_report)
+    RGPU_INFO("[motion] last frame: {} scene draws read a last frame's vertex texture (bones); {} vertex textures",
+              m.vertex_previous, m.vertex_textures[m.cur].size());
   m.cur ^= 1;
   m.frames[m.cur].Clear();
   m.views[m.cur].count = 0;  // TW2 (2026-11-15)
+  m.vertex_textures[m.cur].clear();
+  m.vertex_previous = 0;
   m.last_view = 0;
   ++g_motion_target.frame;
   m.proj_set = false;
@@ -8482,6 +8495,54 @@ void MotionPrepareLocked(const GuestDevice &device, const DrawCall &call, const 
   (v.has_prev ? m.matched : m.unmatched)++;
   sc.motion = 1u | (mode == 2 ? 2u : 0u);
   sc.motion_prev = 4u | (4u << 16);
+  // TW2 (2026-11-15): last frame's texture for each 2D texture the vertex shader samples (xenos_glsl.cpp
+  // MotionVectorPass: dk_tex_prev_bK takes the slot's 3D word). The same texture if last frame's scene draws sampled
+  // it too (the terrain's; a skin texture the game did not swap); else the one of its size and format they sampled
+  // that this frame's do not (the game's other skin texture: the port's copy of it still holds last frame's bones,
+  // it is uploaded only when bound); else this frame's (no motion of its own, as before).
+  if (const u32 vs_textures = vs->entry ? vs->entry->textureFetchMask : 0u) {
+    std::vector<MotionState::VertexTexture> &now = m.vertex_textures[m.cur];
+    const std::vector<MotionState::VertexTexture> &before = m.vertex_textures[m.cur ^ 1];
+    for (u32 r = 0; r < d3d::kTextureFetchSlots; ++r) {
+      const u32 word = sc.texture_indices[0][r];
+      if (!((vs_textures >> r) & 1u) || word == kNullTextureSlot)
+        continue;
+      const u32 va = device.U32(d3d::kDeviceOffsetTextures + r * 4);
+      const TextureFetch fetch = DeviceTextureFetch(device.dev(), r);
+      u32 w = 0, h = 0, d = 0;
+      if (fetch.IsTexture())
+        fetch.Size(w, h, d);
+      const u32 format = u32(fetch.Format());
+      bool noted = false;
+      for (MotionState::VertexTexture &t : now) {
+        if (t.va == va) {
+          t.word = word;
+          noted = true;
+        }
+      }
+      if (!noted && now.size() < 8)
+        now.push_back({va, word, w, h, format});
+      u32 previous = word;
+      bool sampled_before = false;
+      for (const MotionState::VertexTexture &t : before)
+        sampled_before = sampled_before || t.va == va;
+      if (!sampled_before) {
+        for (const MotionState::VertexTexture &t : before) {
+          if (t.width != w || t.height != h || t.format != format)
+            continue;
+          bool sampled_now = false;
+          for (const MotionState::VertexTexture &c : now)
+            sampled_now = sampled_now || c.va == t.va;
+          if (!sampled_now) {
+            previous = t.word;
+            ++m.vertex_previous;
+            break;
+          }
+        }
+      }
+      sc.texture_indices[1][r] = previous;
+    }
+  }
   // FSR 3: the scene jittered.
   // Only single-sampled: FSR does not run on a multisampled scene (anti-aliasing on), whose picture would shake.
   if (Fsr3On() && targets.colors[0]->samples == plume::RenderSampleCount::COUNT_1) {
@@ -9618,6 +9679,13 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
                              flags ? u32(kZeroCopyFlagBytes) : 256u);
   }
 #endif
+  // TW2 (2026-11-15): the vertex shader's previous-frame textures (MotionVectorPass: dk_tex_prev_bK is bound from
+  // the 3D word of its 2D texture's slot): this frame's texture, unless MotionPrepareLocked knows last frame's.
+  if (const u32 vs_textures = vs->entry ? vs->entry->textureFetchMask : 0u) {
+    for (u32 r = 0; r < d3d::kTextureFetchSlots; ++r)
+      if (((vs_textures >> r) & 1u) && sc.texture_indices[0][r] != kNullTextureSlot)
+        sc.texture_indices[1][r] = sc.texture_indices[0][r];
+  }
   MotionPrepareLocked(device, call, vs, ps, *declaration, vs_constants, vs_used, targets, sc,
                       viewport.viewport.minDepth, viewport.viewport.maxDepth);  // tw2de (2026-11-06)
   UploadAllocation sc_alloc;

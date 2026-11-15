@@ -19,7 +19,7 @@ namespace renut::nxs {
 
 namespace {
 // Bump when the translation changes in a way the header's text does not show (shader_recompiler.cpp).
-constexpr uint64_t kTranslatorVersion = 13;  // 13: as 11 again (12, 2026-11-15, made the motion vectors a run-time switch as in the FNXF games: +2.9 ms of GPU a frame at the default settings, taken back); 11: motion from pixel shaders with two colour outputs, the previous constants' range (2026-11-15); 10: no pred-select pass on the Switch (2026-11-12)
+constexpr uint64_t kTranslatorVersion = 14;  // 14 (2026-11-15): the previous-frame textures of a vertex shader (MotionVectorPass); 13: as 11 again (12, 2026-11-15, made the motion vectors a run-time switch as in the FNXF games: +2.9 ms of GPU a frame at the default settings, taken back); 11: motion from pixel shaders with two colour outputs, the previous constants' range (2026-11-15); 10: no pred-select pass on the Switch (2026-11-12)
                                             // 4: the old deko3d passes (2026-10-23); 5: MotionVectorPass (2026-11-06);
                                             // 6: the bound 2D fetches' descriptor word (dynamic resolution, 2026-11-07)
 }  // namespace
@@ -610,6 +610,64 @@ std::string MotionVectorPass(const std::string &glsl, bool pixel) {
     }
     copy = std::move(out);
   }
+  // TW2 (2026-11-15, the user: with FSR 3.1 the NPCs' moving arms ghost): the previous position of a skinned vertex.
+  // The game skins in its vertex shaders, four bones' rows a vertex from a texture (768x256 floats at vertex fetch
+  // slot 16; two such textures filled in turn, a frame each), so the copy has to read LAST frame's texture. Each 2D
+  // texture the shader has bound (BoundTexturePass: dk_tex_bK, texb=K:<texture word>:<sampler word>) that the body
+  // reads gets a second binding, dk_tex_prev_bK, which the copy reads instead; its texture word is the 3D word of the
+  // same fetch slot (SharedConstants texture_indices[1][slot]: 128 bytes after the 2D one, free in a draw whose
+  // texture there is 2D), where render/draw.cpp puts last frame's texture (MotionPrepareLocked), or this frame's.
+  std::string prev_decl, prev_texb;
+  {
+    const size_t dk0 = text.find("// tw2de-dk ");
+    const size_t line_end0 = dk0 == std::string::npos ? std::string::npos : text.find('\n', dk0);
+    const size_t tb = dk0 == std::string::npos ? std::string::npos : text.find(" texb=", dk0);
+    if (tb != std::string::npos && tb < line_end0) {
+      const size_t value_at = tb + 6;
+      const std::string value = text.substr(value_at, std::min(text.find(' ', value_at), line_end0) - value_at);
+      struct Bound {
+        unsigned k, texture_word, sampler_word;
+      };
+      std::vector<Bound> bound;
+      for (size_t q = 0; q < value.size();) {
+        Bound b{};
+        if (std::sscanf(value.c_str() + q, "%u:%u:%u", &b.k, &b.texture_word, &b.sampler_word) != 3)
+          break;
+        bound.push_back(b);
+        const size_t comma = value.find(',', q);
+        if (comma == std::string::npos)
+          break;
+        q = comma + 1;
+      }
+      unsigned next = unsigned(bound.size());
+      for (const Bound &b : bound) {
+        const std::string name = fmt::format("dk_tex_b{}", b.k);
+        if (b.texture_word >= 128 || text.find("uniform sampler2D " + name + ";") == std::string::npos)
+          continue;  // not a 2D texture's word
+        const std::string prev_name = fmt::format("dk_tex_prev_b{}", b.k);
+        std::string out;
+        out.reserve(copy.size() + 256);
+        bool any = false;
+        for (size_t i = 0; i < copy.size();) {
+          if (copy.compare(i, name.size(), name) == 0 && (i == 0 || !IdentChar(copy[i - 1])) &&
+              (i + name.size() >= copy.size() || !IdentChar(copy[i + name.size()]))) {
+            out += prev_name;
+            i += name.size();
+            any = true;
+          }
+          else {
+            out += copy[i++];
+          }
+        }
+        if (!any)
+          continue;  // the body does not read it
+        copy = std::move(out);
+        prev_decl += fmt::format("layout(binding = {}) uniform sampler2D {};\n", next, prev_name);
+        prev_texb += fmt::format(",{}:{}:{}", next, 128 + b.texture_word, b.sampler_word);
+        ++next;
+      }
+    }
+  }
   // main: the previous position first, then the body as it was; the copies to the outputs follow as before.
   const size_t call_at = main_at + std::string_view("\nvoid main()\n{\n").size();
   const std::string call = "    fnxf_xiii_lrVsMain();\n";
@@ -645,7 +703,7 @@ std::string MotionVectorPass(const std::string &glsl, bool pixel) {
   const size_t gc_end = text.find('\n', gc);
   if (gc_end == std::string::npos)
     return glsl;
-  text.insert(gc_end + 1, decl);
+  text.insert(gc_end + 1, decl + prev_decl);
   const size_t dk = text.find("// tw2de-dk ");
   if (dk != std::string::npos) {
     const size_t line_end = text.find('\n', dk);
@@ -654,6 +712,13 @@ std::string MotionVectorPass(const std::string &glsl, bool pixel) {
       const size_t e = std::min(text.find(' ', u), line_end);
       const uint32_t ubo = uint32_t(std::strtoul(text.c_str() + u + 6, nullptr, 16)) | 0x10u;
       text.replace(u, e - u, fmt::format("ubo=0x{:x}", ubo));
+    }
+    // TW2 (2026-11-15): the previous-frame textures' bindings, after the shader's own.
+    if (!prev_texb.empty()) {
+      const size_t line_end2 = text.find('\n', dk);
+      const size_t tb = text.find(" texb=", dk);
+      if (tb != std::string::npos && tb < line_end2)
+        text.insert(std::min(text.find(' ', tb + 6), line_end2), prev_texb);
     }
   }
   return text;
