@@ -1109,10 +1109,12 @@ void Save(const Settings &s) {
 bool UpscalerUsable(const Profile &p, int mode) {
   // TW2 (2026-11-14): TW2's last pass scales the scene to the output; the Upscaler takes that over for a
   // scene no larger than 1280x720 (1024x576 and the game's own 1280x672, which even a 1280x720 output enlarges).
+  // TW2 (2026-11-15, the user: no Upscaler choice at 1280x720 with dynamic resolution): the lowered picture is
+  // enlarged with the Upscaler too (draw.cpp Tw2FinalUpscale), so 1280x720 has the row in hand as well then.
   if (kGameVideoFixed)
     return p.aa != kAaFsr3 &&  // TW2 (2026-11-15): FSR 3.1 upscales itself
-           p.dynres == 0 &&  // with dynamic resolution the game's last pass enlarges the part drawn
-           (p.resolution <= kResOwn || (p.resolution == kRes720 && mode == kDocked));  // 1280x720: on a 1080p TV only
+           (p.resolution <= kResOwn ||
+            (p.resolution == kRes720 && (mode == kDocked || p.dynres != 0)));  // 1280x720 alone: on a 1080p TV only
   return p.aa != 4 &&
          (p.resolution == 0 || p.dynres != 0 || (mode == 1 && (p.resolution == 1 || p.resolution == 2)));
 }
@@ -1155,8 +1157,8 @@ void Apply(const Settings &settings) {
   const int32_t filter = !UpscalerUsable(s, docked ? kDocked : kHandheld) ? 4
                          : s.upscaler == 2 ? 3 : kGameVideoFixed && s.upscaler == 0 ? 4 : 1;
   REXCVAR_SET(tw2de_renut_upscale_filter, filter);
-  // TW2 (2026-11-15): not with FSR 3.1 (its inputs would change size with every level; not built yet).
-  const bool drs = s.dynres != 0 && !(kGameVideoFixed && s.aa == kAaFsr3);
+  // TW2 (2026-11-15): with FSR 3.1 too (draw.cpp MotionSceneInputsLocked: its inputs at the level's size).
+  const bool drs = s.dynres != 0;
   REXCVAR_SET(tw2de_drs, int32_t(drs));  // TW2 (2026-11-14): open in TW2 too  // tw2de (2026-11-07): render/dynamic_resolution.cpp
   if (drs)
     REXCVAR_SET(tw2de_drs_min, int32_t(s.dynres));  // tw2de (2026-11-08): the lowest height the player chose
@@ -1424,10 +1426,7 @@ bool ShowMenu(Settings &s, PadState &pad) {
             [[fallthrough]];
           default: break;
           }
-          switch ((kGameResolutionFixed && sub_selected == kSubResolution) ||
-                          (kGameVideoFixed && sub_selected == kSubDynres && p.aa == kAaFsr3)  // TW2: off with FSR 3.1
-                      ? -1
-                      : sub_selected) {
+          switch (kGameResolutionFixed && sub_selected == kSubResolution ? -1 : sub_selected) {
           case kSubResolution: p.resolution = (std::min(p.resolution, kResolutionMenuCount - 1) + kResolutionMenuCount + step) %
                                              kResolutionMenuCount; break;
           case kSubAa:
@@ -1553,10 +1552,9 @@ bool ShowMenu(Settings &s, PadState &pad) {
                                               : t.bilinear,
                           usable});
         // tw2de (2026-11-07): off, or the range from its lowest height (2026-11-08).
-        const bool dynres_usable = !(kGameVideoFixed && p.aa == kAaFsr3);  // TW2 (2026-11-15): not with FSR 3.1
-        m.rows.push_back({t.dynres,
-                          p.dynres && dynres_usable ? std::to_string(p.dynres) + "% \xE2\x80\x93 100%" : std::string(t.off),
-                          dynres_usable});
+        // TW2 (2026-11-15): with FSR 3.1 too (it was off with it: fsr3.cpp takes each level's render size now).
+        m.rows.push_back({t.dynres, p.dynres ? std::to_string(p.dynres) + "% \xE2\x80\x93 100%" : std::string(t.off),
+                          true});
         m.selected = sub_selected;
         switch (sub_selected) {
         case kSubInterval: m.note = t.note_interval; break;
@@ -1574,7 +1572,8 @@ bool ShowMenu(Settings &s, PadState &pad) {
           else
             m.note = std::string(p.upscaler == 2 ? t.note_up_fsr1 : kGameVideoFixed && p.upscaler == 0 ? t.note_up_bilinear
                                                                                               : t.note_up_lanczos) +
-                     (p.resolution == kRes720 ? t.note_up_tv : "");  // TW2: only 1280x720 needs a 1080p TV for it
+                     // TW2: only 1280x720 without dynamic resolution needs a 1080p TV for it
+                     (p.resolution == kRes720 && p.dynres == 0 ? t.note_up_tv : "");
           break;
         case kSubDynres: m.note = t.note_dynres; break;
         default: break;

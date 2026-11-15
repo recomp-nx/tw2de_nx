@@ -2057,7 +2057,9 @@ plume::RenderFramebuffer *MotionFramebufferLocked(const Targets &t) {
     m.samples = c->samples;
     m.layout = plume::RenderTextureLayout::UNKNOWN;
     m.cleared_frame = ~uint64_t(0);
-    RGPU_INFO("[motion] motion vector target {}x{}, {} samples", w, h, u32(c->samples));
+    static uint32_t logged = 0;  // TW2 (2026-11-15): made again at each dynamic-resolution level
+    if (logged++ < 8)
+      RGPU_INFO("[motion] motion vector target {}x{}, {} samples", w, h, u32(c->samples));
   }
   // TW2 (2026-11-15): one colour target and a pixel shader with a second colour output: the filler in between.
   const bool filler = !c1 && m.second_output;
@@ -7780,8 +7782,13 @@ int32_t UpscaleFilter() {
 // pixel), and that picture is then enlarged over the output target with the chosen filter (DrawStateLocked's end,
 // early_upscale.h EarlyUpscaleCopyLocked; FSR 1: EASU, then RCAS). A larger scene (1600x900, 1920x1080) keeps the
 // game's own scaling. 'w', 'h': the scene's size (tw2de_scene_width / tw2de_scene_height, cpu/tw2de_scene_size.cpp).
+// TW2 (2026-11-15, the user: no Upscaler choice with dynamic resolution): with dynamic resolution's levels as target
+// sizes the same is done from the level's variant of the output target (the one the pass's picture was resolved
+// from): the pass drawn at the scene's size there, then enlarged over the output's own variant. At the full size of a
+// 1280x720 scene on a 1280x720 output there is nothing to enlarge: the pass as the game draws it.
 bool Tw2FinalUpscale(const GuestDevice &device, const ShaderRecord *ps, uint32_t &w, uint32_t &h) {
-  if (!IsDeko3D() || !Tw2FinalPass(device, ps) || DrsOn())  // dynamic resolution: the last pass enlarges its part
+  // Dynamic resolution the way of 2026-11-07 (targets of the full size drawn in part): the last pass enlarges its part.
+  if (!IsDeko3D() || !Tw2FinalPass(device, ps) || (DrsOn() && !DrsSized()))
     return false;
   const int32_t filter = UpscaleFilter();
   if (filter != 1 && filter != 3)
@@ -7791,6 +7798,11 @@ bool Tw2FinalUpscale(const GuestDevice &device, const ShaderRecord *ps, uint32_t
   h = sw > 0 && sh > 0 ? uint32_t(sh) : 672u;
   if (w > 1280 || h > 720)
     return false;
+  if (DrsSized()) {  // TW2 (2026-11-15): the scene's size in this frame's level's targets (host pixels)
+    const RenderScale level = DrsSceneScale();
+    w = uint32_t(std::max(level.Coord(int32_t(w)), 1));
+    h = uint32_t(std::max(level.Coord(int32_t(h)), 1));
+  }
   return Output1080p() || w < 1280 || h < 720;
 }
 // Once: which shader, and the game's own constants of the draw (c0, c1: the sizes Renut's shaders read; c253-c255: the
@@ -8503,6 +8515,15 @@ Fsr3SceneInputs MotionSceneInputsLocked() {
   if (t.scene && t.scene->scale.drs) {
     in.width = std::min(DrsDrawn(t.width), t.width);
     in.height = std::min(DrsDrawn(t.height), t.height);
+  }
+  // TW2 (2026-11-15, FSR 3.1 with dynamic resolution's levels as target sizes): the motion and depth targets (and
+  // the picture) have this frame's level's size and are read whole; FSR's own textures are made once, for the full
+  // size (the first level's), and it is told each frame's render size (as with the way of 2026-11-07 above).
+  if (t.scene_depth && t.scene_depth->scale.Dynamic()) {
+    RenderScale full;
+    full.code = RenderScale::kDrsFirst;
+    in.max_width = std::max(in.max_width, full.Size(t.scene_depth->width));
+    in.max_height = std::max(in.max_height, full.Size(t.scene_depth->height));
   }
   in.single_sample = t.samples == plume::RenderSampleCount::COUNT_1 && t.scene_depth &&
                      t.scene_depth->samples == plume::RenderSampleCount::COUNT_1;
@@ -10199,7 +10220,8 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   // output phase begins here; the same surface at 1280x720) with the Upscaler's filter, before the GUI draws on it.
   if (tw2_final_upscale && targets.color_count == 1 && targets.colors[0] && !export_count) {
     HostSurface *corner = targets.colors[0];
-    if (Output1080p()) {
+    // TW2 (2026-11-15): with dynamic resolution too (the corner is the level's variant, the output's the 1x one).
+    if (Output1080p() || DrsSized()) {
       bool changed = SetOutputPhaseLocked(true);
       changed |= PromoteOutputTargetLocked(corner->out_key);
       if (changed)

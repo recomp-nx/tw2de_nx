@@ -682,7 +682,13 @@ void Fsr3FrameStartLocked() {
   // tw2de (2026-11-07, dynamic resolution): the render size this frame draws (the textures' is the largest), and the
   // phase count stepped by one a frame towards the new ratio's (xc1fsr), not jumping with each change.
   uint32_t rw = g3.render_w ? g3.render_w : 1024, rh = g3.render_h ? g3.render_h : 576;
-  if (DrsOn()) {
+  if (DrsSized()) {
+    // TW2 (2026-11-15, dynamic resolution's levels as target sizes): this frame's level's size (the scene's targets
+    // are made at it; DrsFrameStartLocked chose it before this). The jitter is half a pixel of that size.
+    const RenderScale level = DrsSceneScale();
+    rw = level.Size(rw);
+    rh = level.Size(rh);
+  } else if (DrsOn()) {
     rw = DrsDrawn(rw);
     rh = DrsDrawn(rh);
   }
