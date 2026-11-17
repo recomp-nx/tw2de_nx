@@ -65,6 +65,8 @@ REXCVAR_DEFINE_INT32(tw2de_diag_drs_dump, 0, "Game/Diagnostics",
     .range(0, 1000)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DECLARE(bool, log_diagnostics);  // tw2de (2026-11-17): sdk/src/system/xobject.cpp
+
 namespace tw2de {
 uint32_t RenderHeight();  // cpu/tw2de_render_resolution.cpp
 namespace renut_gpu {
@@ -226,7 +228,8 @@ void DrsFrameStartLocked() {
     g_drs_factor = 1.0f;
     return;
   }
-  if (was != g.gameplay && g.changes < 400)
+  // tw2de (2026-11-17, the user: no lines printed again and again in a normal run): with log_diagnostics only.
+  if (was != g.gameplay && g.changes < 400 && REXCVAR_GET(log_diagnostics))
     REXLOG_INFO("[drs] {} ({} geometry draws, {} others)",
                 g.gameplay ? "3D gameplay: dynamic resolution on" : "not 3D gameplay: full resolution", scene_draws,
                 other_draws);
@@ -237,7 +240,8 @@ void DrsFrameStartLocked() {
   if (level != g.applied) {
     if (sized)
       BumpSurfaceEpochLocked();  // the scene's targets are other ones from this frame on (DrsSceneScale)
-    if (g.applied >= 0 && was && g.gameplay && g.changes++ < 400)  // the controller's (not gameplay's on / off)
+    if (g.applied >= 0 && was && g.gameplay && g.changes++ < 400 &&
+        REXCVAR_GET(log_diagnostics))  // the controller's (not gameplay's on / off); tw2de (2026-11-17): diagnostics
       REXLOG_INFO("[drs] {} -> {} lines (GPU load {:.0f}% of {:.1f} ms)", 9 * LevelM(g.applied), 9 * m, g.last_avg,
                   BudgetMs());
     // tw2de_diag_drs_dump: this frame (the first of the new level) and the next.
@@ -254,7 +258,7 @@ void DrsFrameStartLocked() {
   ++g.drawn_n;
   const auto now = Clock::now();
   if (now - g.report_at >= std::chrono::seconds(10)) {
-    if (g.report_at != Clock::time_point{} && g.drawn_n)
+    if (g.report_at != Clock::time_point{} && g.drawn_n && REXCVAR_GET(log_diagnostics))  // tw2de (2026-11-17)
       REXLOG_INFO("[drs] last 10 s: {:.0f} lines on average, now {} ({} changes so far; last frame {} geometry draws, {} "
                   "others)",
                   g.drawn_sum / g.drawn_n, 9 * m, g.changes, g.last_scene, g.last_other);

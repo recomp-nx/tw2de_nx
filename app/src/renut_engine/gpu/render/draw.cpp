@@ -10361,7 +10361,7 @@ struct ResolutionCounts {
         best = i;
     // The per-size draws, for the log now and then (what the choice was made from).
     static uint32_t takes = 0, logged = 0;
-    if (best >= 0 && ++takes % 30 == 0 && logged < 20) {
+    if (best >= 0 && ++takes % 30 == 0 && logged < 20 && REXCVAR_GET(log_diagnostics)) {  // tw2de (2026-11-17)
       ++logged;
       std::string line;
       for (const ResolutionCount &c : slots)

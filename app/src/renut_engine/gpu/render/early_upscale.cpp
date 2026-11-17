@@ -25,6 +25,8 @@ REXCVAR_DEFINE_INT32(tw2de_early_upscale_filter, 0, "Game/Renut",
                      "2 nearest texel")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DECLARE(bool, log_diagnostics);  // tw2de (2026-11-17): sdk/src/system/xobject.cpp
+
 #if defined(PLUME_DEKO3D)
 
 #include "host_shaders/early_easu_ps.deko3d.h"
@@ -287,7 +289,7 @@ bool EarlyUpscaleCopyLocked(HostSurface *src, uint32_t src_w, uint32_t src_h, Ho
   cmd->drawInstanced(3, 1, 0, 0);
   cmd->setFramebuffer(nullptr);
   static uint32_t logged = 0;
-  if (logged++ < 4)
+  if (REXCVAR_GET(log_diagnostics) && logged++ < 4)  // tw2de (2026-11-17): diagnostics only
     RGPU_INFO("[upscale] the game's last pass drawn at the scene's size, then enlarged ({}): {}x{} -> {}x{}",
               easu ? "FSR 1 EASU" : "Lanczos-2", src_w, src_h, dst_w, dst_h);
   return true;

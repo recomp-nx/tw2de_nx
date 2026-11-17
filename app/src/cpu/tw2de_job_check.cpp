@@ -23,6 +23,8 @@
 REXCVAR_DEFINE_BOOL(tw2de_diag_jobs, false, "Game/Diagnostics",
                     "Check the job batch worker's lists at each call (the job worker crash, 2026-11-12)");
 
+REXCVAR_DECLARE(bool, log_diagnostics);  // tw2de (2026-11-17): sdk/src/system/xobject.cpp
+
 REX_EXTERN(__imp__sub_82F78458);
 REX_EXTERN(__imp__sub_8234FE48);
 
@@ -71,7 +73,7 @@ extern "C" REX_FUNC(sub_82F78458) {
       waited = true;
       std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
-    if (waited)
+    if (waited && REXCVAR_GET(log_diagnostics))  // tw2de (2026-11-17): diagnostics only
       REXLOG_INFO("[jobs] worker {:08X} started before its constructor finished: waited {:.2f} ms (flag {}, start "
                   "semaphore {:08X})",
                   worker, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),

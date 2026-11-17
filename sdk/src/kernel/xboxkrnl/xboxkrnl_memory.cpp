@@ -18,11 +18,14 @@
 #include <rex/assert.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
+#include <rex/cvar.h>
 #include <rex/math.h>
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xtypes.h>
+
+REXCVAR_DECLARE(bool, log_diagnostics);  // tw2de (2026-11-17): sdk/src/system/xobject.cpp
 
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
@@ -415,7 +418,7 @@ u32 MmAllocatePhysicalMemoryEx_entry(u32 flags, u32 region_size, u32 protect_bit
   REXKRNL_IMPORT_RESULT("MmAllocatePhysicalMemoryEx", "addr={:#x}", base_address);
   if (region_size >= 0x400000) {  // tw2de (2026-11-07): the large ones (the game's arenas)
     static std::atomic<int> logged_big{0};
-    if (logged_big.fetch_add(1) < 64)
+    if (REXCVAR_GET(log_diagnostics) && logged_big.fetch_add(1) < 64)  // tw2de (2026-11-17): diagnostics only
       REXKRNL_INFO("MmAllocatePhysicalMemoryEx: {:#x} bytes at {:#x} (protect {:#x}, alignment {:#x})", region_size,
                    base_address, protect_bits, alignment);
   }

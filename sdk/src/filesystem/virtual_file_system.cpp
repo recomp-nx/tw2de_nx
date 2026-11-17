@@ -18,6 +18,22 @@
 
 REXCVAR_DECLARE(bool, log_diagnostics);  // tw2de (2026-10-25): sdk/src/system/xobject.cpp
 
+#include <mutex>
+#include <string>
+#include <unordered_set>
+
+namespace {
+// tw2de (2026-11-17): a path that resolves to no device is said the first time only. The game asks for some again and
+// again (e.g. "globals\gui\" without a device, ~25 times a second while its menus run): each three log lines
+// written to the SD card. Also with log_diagnostics.
+bool FirstNoDevice(std::string_view path) {
+  static std::mutex mutex;
+  static std::unordered_set<std::string> said;
+  std::lock_guard<std::mutex> lock(mutex);
+  return said.emplace(path).second;
+}
+}  // namespace
+
 REXCVAR_DEFINE_BOOL(allow_game_relative_writes, false, "Filesystem",
                     "Not useful to non-developers. Allows code to write to paths "
                     "relative to game://. Used for "
@@ -125,7 +141,8 @@ Entry* VirtualFileSystem::ResolvePath(const std::string_view path) {
   if (it == devices_.cend()) {
     // tw2de (2026-10-25): the game's development drive ("devkit:"), probed at every start, is not there by design:
     // said only with log_diagnostics.
-    const bool expected = rex::string::utf8_starts_with_case(path, "devkit:") && !REXCVAR_GET(log_diagnostics);
+    const bool expected = (rex::string::utf8_starts_with_case(path, "devkit:") && !REXCVAR_GET(log_diagnostics)) ||
+                          !FirstNoDevice(path);
     if (!expected)
       REXFS_WARN("VFS: '{}' -> [no device]", path);
     // Supress logging the error for ShaderDumpxe:\CompareBackEnds as this is

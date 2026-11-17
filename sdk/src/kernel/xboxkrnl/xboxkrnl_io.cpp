@@ -39,6 +39,7 @@ REXCVAR_DECLARE(bool, log_diagnostics);  // tw2de (2026-10-24): sdk/src/system/x
 
 #include <cctype>
 #include <mutex>
+#include <unordered_set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -533,9 +534,18 @@ u32 NtCreateFile_entry(mapped_u32 handle_out, u32 desired_access,
     // file list and the patch lists of a disc build) fail as they should: said only with log_diagnostics. A failure to
     // open any other file is still a warning (a missing game file).
     const std::string_view probe = target_path;
+    // tw2de (2026-11-17): and a path that already failed (said the first time only: the game opens some again and
+    // again, e.g. "globals\\gui\\" ~25 times a second while its menus run, each a line on the SD card).
+    static std::mutex failed_mutex;
+    static std::unordered_set<std::string> failed;
+    bool again;
+    {
+      std::lock_guard<std::mutex> lock(failed_mutex);
+      again = !failed.emplace(probe).second;
+    }
     const bool expected = probe.starts_with("devkit:") || probe.ends_with("\\sys\\filelist.x360.bin") ||
                           probe.find("\\sys\\patchlist") != std::string_view::npos;
-    if (!expected || REXCVAR_GET(log_diagnostics))
+    if (!again && (!expected || REXCVAR_GET(log_diagnostics)))
       REXKRNL_IMPORT_FAIL("NtCreateFile", "path='{}' -> {:#x}", target_path, result);
   } else {
     REXKRNL_IMPORT_RESULT("NtCreateFile", "{:#x} handle={:#x}", result, handle);
