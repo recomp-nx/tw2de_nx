@@ -11,6 +11,8 @@
 
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
+#include <rex/cvar.h>
+REXCVAR_DECLARE(bool, tw2de_diag_saves);  // TW2 (2026-11-17): sdk/src/system/xobject.cpp
 #include <rex/math.h>
 #include <rex/hook.h>
 #include <rex/types.h>
@@ -78,6 +80,9 @@ u32 XamContentGetDeviceName_entry(u32 device_id, mapped_wstring name_buffer, u32
 
 u32 XamContentGetDeviceState_entry(u32 device_id, mapped_void overlapped_ptr) {
   auto device_info = GetDummyDeviceInfo(device_id);
+  if (REXCVAR_GET(tw2de_diag_saves))
+    REXKRNL_INFO("[saves] XamContentGetDeviceState device {:08X} (overlapped {:08X}): {}", uint32_t(device_id),
+                 overlapped_ptr.guest_address(), device_info ? "connected" : "not connected");
   if (device_info == nullptr) {
     if (overlapped_ptr) {
       REX_KERNEL_STATE()->CompleteOverlappedImmediateEx(
@@ -110,6 +115,9 @@ static_assert_size(X_CONTENT_DEVICE_DATA, 0x50);
 
 u32 XamContentGetDeviceData_entry(u32 device_id, ppc_ptr_t<X_CONTENT_DEVICE_DATA> device_data) {
   auto device_info = GetDummyDeviceInfo(device_id);
+  if (REXCVAR_GET(tw2de_diag_saves))
+    REXKRNL_INFO("[saves] XamContentGetDeviceData device {:08X}: {}", uint32_t(device_id),
+                 device_info ? "connected" : "not connected");
   if (device_info == nullptr) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
@@ -131,6 +139,9 @@ u32 XamContentCreateDeviceEnumerator_entry(u32 content_type, u32 content_flags, 
     *buffer_size_ptr = sizeof(X_CONTENT_DEVICE_DATA) * max_count;
   }
 
+  if (REXCVAR_GET(tw2de_diag_saves))
+    REXKRNL_INFO("[saves] XamContentCreateDeviceEnumerator type {:08X} flags {:08X} max {}", uint32_t(content_type),
+                 uint32_t(content_flags), uint32_t(max_count));
   auto e = make_object<XStaticEnumerator<X_CONTENT_DEVICE_DATA>>(REX_KERNEL_STATE(), max_count);
   auto result = e->Initialize(0xFE, 0xFE, 0x2000A, 0x20009, 0);
   if (XFAILED(result)) {

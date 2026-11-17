@@ -18,6 +18,7 @@
 
 #include <rex/cvar.h>
 REXCVAR_DECLARE(bool, log_diagnostics);  // tw2de (2026-10-24): sdk/src/system/xobject.cpp
+REXCVAR_DECLARE(bool, tw2de_diag_saves);  // TW2 (2026-11-17): sdk/src/system/xobject.cpp
 #include <rex/filesystem/device.h>
 #include <rex/filesystem/devices/host_path_device.h>
 #include <rex/filesystem/devices/host_path_file.h>
@@ -457,6 +458,14 @@ static bool IsValidPath(const std::string_view s, bool is_pattern) {
   return true;
 }
 
+// TW2 (2026-11-17, tw2de_diag_saves): a path into the game's own save folder ("...\\gamesaves\\...").
+static bool HasGameSaves(std::string_view p) {
+  std::string lower(p);
+  for (char &c : lower)
+    c = char(std::tolower(static_cast<unsigned char>(c)));
+  return lower.find("gamesave") != std::string::npos;
+}
+
 u32 NtCreateFile_entry(mapped_u32 handle_out, u32 desired_access,
                        ppc_ptr_t<X_OBJECT_ATTRIBUTES> object_attrs,
                        ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block, mapped_u64 allocation_size_ptr,
@@ -529,6 +538,18 @@ u32 NtCreateFile_entry(mapped_u32 handle_out, u32 desired_access,
   }
 
   *handle_out = handle;
+  // TW2 (2026-11-17, tw2de_diag_saves): every open outside the game's own files (the save containers' mounts), and the
+  // game's own save folder.
+  if (REXCVAR_GET(tw2de_diag_saves)) {
+    const std::string_view p = target_path;
+    const bool game = p.size() >= 5 && rex::string::utf8_starts_with_case(p, "game:");
+    const bool saves = HasGameSaves(p);
+    static std::atomic<uint32_t> said{0};
+    if ((!game || saves) && !p.starts_with("devkit:") && said.fetch_add(1) < 400)
+      REXKRNL_INFO("[saves] NtCreateFile '{}' access {:08X} disposition {} options {:08X} -> {:08X} handle {:08X}",
+                   target_path, uint32_t(desired_access), uint32_t(creation_disposition), uint32_t(create_options),
+                   uint32_t(result), handle);
+  }
   if (XFAILED(result)) {
     // tw2de (2026-10-25): the files the game only probes for at every start (its development drive "devkit:", the
     // file list and the patch lists of a disc build) fail as they should: said only with log_diagnostics. A failure to
@@ -633,8 +654,10 @@ u32 NtReadFile_entry(u32 file_handle, u32 event_handle, mapped_void apc_routine_
         observer(file->path(), displacement, buffer.guest_address(), bytes_read);
       MaybeSummaryIo(io_us_end);
       if (io_status_block) {
-        io_status_block->status = result;
+        // TW2 (2026-11-17): the byte count, then the status a poller on another core waits for
         io_status_block->information = bytes_read;
+        std::atomic_thread_fence(std::memory_order_release);
+        io_status_block->status = result;
       }
 
       // Queue the APC callback. It must be delivered via the APC mechanism even
@@ -736,8 +759,10 @@ u32 NtReadFileScatter_entry(u32 file_handle, u32 event_handle, mapped_void apc_r
                                  byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : -1,
                                  &bytes_read, apc_context.guest_address());
       if (io_status_block) {
-        io_status_block->status = result;
+        // TW2 (2026-11-17): the byte count, then the status a poller on another core waits for
         io_status_block->information = bytes_read;
+        std::atomic_thread_fence(std::memory_order_release);
+        io_status_block->status = result;
       }
 
       // Queue the APC callback. It must be delivered via the APC mechanism even
@@ -824,8 +849,10 @@ u32 NtWriteFile_entry(u32 file_handle, u32 event_handle, u32 apc_routine, mapped
                            &bytes_written, apc_context.guest_address());
 
       if (io_status_block) {
-        io_status_block->status = result;
+        // TW2 (2026-11-17): the byte count, then the status a poller on another core waits for
         io_status_block->information = static_cast<uint32_t>(bytes_written);
+        std::atomic_thread_fence(std::memory_order_release);
+        io_status_block->status = result;
       }
 
       // Queue the APC callback. It must be delivered via the APC mechanism even
@@ -1003,6 +1030,23 @@ u32 NtQueryDirectoryFile_entry(u32 file_handle, u32 event_handle, u32 apc_routin
 
   if (XFAILED(result)) {
     info = 0;
+  }
+
+  // TW2 (2026-11-17, tw2de_diag_saves): directory reads outside the game's own files, with the first name answered
+  if (REXCVAR_GET(tw2de_diag_saves) && file) {
+    const std::string &dir = file->path();
+    const bool game = rex::string::utf8_starts_with_case(dir, "game:");
+    static std::atomic<uint32_t> said{0};
+    if ((!game || HasGameSaves(dir)) &&
+        said.fetch_add(1) < 400) {
+      std::string first;
+      if (XSUCCEEDED(result) && file_info_ptr) {
+        const uint32_t n = std::min<uint32_t>(file_info_ptr->file_name_length, 255);
+        first.assign(file_info_ptr->file_name, n);
+      }
+      REXKRNL_INFO("[saves] NtQueryDirectoryFile '{}' filter '{}' restart {} -> {:08X} first '{}'", dir, name,
+                   uint32_t(restart_scan), uint32_t(result), first);
+    }
   }
 
   if (io_status_block) {

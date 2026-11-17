@@ -46,6 +46,12 @@ REXCVAR_DEFINE_BOOL(log_diagnostics, false, "Logging",
                     "Diagnostic reports in the log: the 10 s reports (renderer, audio, I/O, guest waits, memory, fence "
                     "waits, memexport) and the slow-load diagnostics ([slots], [vins], [resmgr] and their stack dumps "
                     "into rex_stall.log)");
+// TW2 (2026-11-17): the saves the main menu offers (Load / Continue), with each step that leads to them.
+REXCVAR_DEFINE_BOOL(tw2de_diag_saves, false, "Game/Diagnostics",
+                    "Log (\"[saves]\" lines) the save list and what leads to it: the content enumerators "
+                    "and their reads, sign-in and XUID answers, the storage device queries, the notifications "
+                    "taken, the save containers opened and closed, and file opens and directory reads "
+                    "outside game:. For a run where the main menu shows no saves.");
 
 namespace rex::system {
 

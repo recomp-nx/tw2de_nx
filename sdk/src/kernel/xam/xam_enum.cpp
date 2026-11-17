@@ -12,6 +12,8 @@
 #include <rex/kernel/xam/module.h>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
+#include <rex/cvar.h>
+REXCVAR_DECLARE(bool, tw2de_diag_saves);  // TW2 (2026-11-17): sdk/src/system/xobject.cpp
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/string.h>
@@ -24,6 +26,8 @@
 #endif
 
 #include <fmt/format.h>
+
+#include <atomic>
 
 namespace rex {
 namespace kernel {
@@ -38,6 +42,8 @@ uint32_t xeXamEnumerate(uint32_t handle, uint32_t flags, mapped_void buffer_ptr,
 
   auto e = REX_KERNEL_OBJECTS()->LookupObject<XEnumerator>(handle);
   if (!e) {
+    if (REXCVAR_GET(tw2de_diag_saves))
+      REXKRNL_INFO("[saves] XamEnumerate handle {:08X}: no such enumerator", handle);
     return X_ERROR_INVALID_HANDLE;
   }
 
@@ -60,10 +66,25 @@ uint32_t xeXamEnumerate(uint32_t handle, uint32_t flags, mapped_void buffer_ptr,
     uint32_t item_count;
     X_RESULT result = run(extended_error, item_count);
     *items_returned = result == X_ERROR_SUCCESS ? item_count : 0;
+    static std::atomic<uint32_t> said{0};
+    if (REXCVAR_GET(tw2de_diag_saves) && said.fetch_add(1) < 300)
+      REXKRNL_INFO("[saves] XamEnumerate handle {:08X} buffer {} bytes (now): {} item(s), result {:08X}", handle,
+                   buffer_size, item_count, uint32_t(result));
     return result;
   } else if (overlapped_ptr) {
     assert_true(!items_returned);
-    REX_KERNEL_STATE()->CompleteOverlappedDeferredEx(run, overlapped_ptr);
+    // TW2 (2026-11-17, tw2de_diag_saves): the read, and when it completes
+    auto logged = [run, handle, buffer_size, overlapped_ptr](uint32_t& extended_error, uint32_t& length) -> X_RESULT {
+      const X_RESULT result = run(extended_error, length);
+      static std::atomic<uint32_t> said{0};
+      if (REXCVAR_GET(tw2de_diag_saves) && said.fetch_add(1) < 300)
+        REXKRNL_INFO("[saves] XamEnumerate handle {:08X} buffer {} bytes (overlapped {:08X}) completed: {} item(s), "
+                     "result {:08X}", handle, buffer_size, overlapped_ptr, length, uint32_t(result));
+      return result;
+    };
+    if (REXCVAR_GET(tw2de_diag_saves))
+      REXKRNL_INFO("[saves] XamEnumerate handle {:08X} (overlapped {:08X}): queued", handle, overlapped_ptr);
+    REX_KERNEL_STATE()->CompleteOverlappedDeferredEx(logged, overlapped_ptr);
     return X_ERROR_IO_PENDING;
   } else {
     assert_always();

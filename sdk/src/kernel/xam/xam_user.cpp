@@ -15,8 +15,10 @@
 #include <cstring>
 
 #include <rex/cvar.h>
+#include <mutex>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
+REXCVAR_DECLARE(bool, tw2de_diag_saves);  // TW2 (2026-11-17): sdk/src/system/xobject.cpp
 #include <rex/math.h>
 #include <rex/hook.h>
 #include <rex/types.h>
@@ -35,6 +37,27 @@ namespace kernel {
 namespace xam {
 using namespace rex::system;
 using namespace rex::system::xam;
+
+namespace {
+// TW2 (2026-11-17, tw2de_diag_saves): an answer of sign-in state / XUID, said when it changes from the last one.
+void SaySigninAnswer(int which, uint32_t user_index, uint32_t result, uint64_t value) {
+  if (!REXCVAR_GET(tw2de_diag_saves))
+    return;
+  static std::mutex mutex;
+  static uint64_t last[3][5][2] = {};
+  static bool seen[3][5] = {};
+  static const char *const kNames[] = {"XamUserGetXUID", "XamUserGetSigninState", "XamUserGetSigninInfo"};
+  const uint32_t u = user_index < 4 ? user_index : 4;
+  std::lock_guard<std::mutex> lock(mutex);
+  if (seen[which][u] && last[which][u][0] == result && last[which][u][1] == value)
+    return;
+  seen[which][u] = true;
+  last[which][u][0] = result;
+  last[which][u][1] = value;
+  REXKRNL_INFO("[saves] {} user {}: result {:08X} value {:016X} (said again when it changes)", kNames[which], user_index,
+               result, value);
+}
+}  // namespace
 
 i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
   assert_true(type_mask == 1 || type_mask == 2 || type_mask == 3 || type_mask == 4 ||
@@ -62,6 +85,7 @@ i32 XamUserGetXUID_entry(u32 user_index, u32 type_mask, mapped_u64 xuid_ptr) {
     result = X_E_INVALIDARG;
   }
   *xuid_ptr = xuid;
+  SaySigninAnswer(0, user_index, result, xuid);
   return result;
 }
 
@@ -73,6 +97,7 @@ u32 XamUserGetSigninState_entry(u32 user_index) {
       signin_state = user_profile->signin_state();
     }
   }
+  SaySigninAnswer(1, user_index, 0, signin_state);
   return signin_state;
 }
 
@@ -100,6 +125,7 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
   info->xuid = user_profile->xuid();
   info->signin_state = user_profile->signin_state();
   rex::string::copy_truncating(info->name, user_profile->name(), rex::countof(info->name));
+  SaySigninAnswer(2, user_index, uint32_t(info->signin_state), uint64_t(info->xuid));
   return X_E_SUCCESS;
 }
 

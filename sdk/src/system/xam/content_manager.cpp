@@ -30,6 +30,7 @@
 #include <rex/system/xfile.h>
 #include <rex/system/xobject.h>
 REXCVAR_DECLARE(bool, log_diagnostics);  // tw2de: sdk/src/system/xobject.cpp
+REXCVAR_DECLARE(bool, tw2de_diag_saves);  // TW2 (2026-11-17): sdk/src/system/xobject.cpp
 
 /*
  * Readable copy of the saves and a trace of what happens to them.
@@ -349,6 +350,24 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(uint32_t device
   // content_root/xuid/title_id/type_name/*
   auto package_root = ResolvePackageRoot(xuid, content_type, title_id);
   auto file_infos = rex::filesystem::ListFiles(package_root);
+  // TW2 (2026-11-17, tw2de_diag_saves): ListFiles says nothing when the folder cannot be read (an empty list): the
+  // folder's state asked again, with the error.
+  if (REXCVAR_GET(tw2de_diag_saves)) {
+    std::error_code ec_exists, ec_dir;
+    const bool exists = std::filesystem::exists(package_root, ec_exists);
+    const bool is_dir = std::filesystem::is_directory(package_root, ec_dir);
+    size_t dirs = 0;
+    for (const auto& fi : file_infos)
+      dirs += fi.type == rex::filesystem::FileInfo::Type::kDirectory;
+    REXSYS_INFO("[saves] ListContent xuid {:016X} title {:08X} type {:08X} in {}: exists {} ({}), folder {} ({}), "
+                "{} entr(ies), {} folder(s)",
+                xuid, title_id, uint32_t(content_type), rex::path_to_utf8(package_root), exists, ec_exists.message(),
+                is_dir, ec_dir.message(), file_infos.size(), dirs);
+    for (const auto& fi : file_infos)
+      REXSYS_INFO("[saves]   {} '{}' ({} bytes)",
+                  fi.type == rex::filesystem::FileInfo::Type::kDirectory ? "folder" : "file",
+                  rex::path_to_utf8(fi.name), fi.total_size);
+  }
   for (const auto& file_info : file_infos) {
     if (file_info.type != rex::filesystem::FileInfo::Type::kDirectory) {
       // Directories only.

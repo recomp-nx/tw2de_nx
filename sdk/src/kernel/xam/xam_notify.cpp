@@ -11,6 +11,9 @@
 
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
+#include <rex/cvar.h>
+#include <atomic>
+REXCVAR_DECLARE(bool, tw2de_diag_saves);  // TW2 (2026-11-17): sdk/src/system/xobject.cpp
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
@@ -35,6 +38,8 @@ uint32_t xeXamNotifyCreateListener(uint64_t mask, uint32_t is_system, uint32_t m
 
   // Handle ref is incremented, so return that.
   uint32_t handle = listener->handle();
+  if (REXCVAR_GET(tw2de_diag_saves))
+    REXKRNL_INFO("[saves] XamNotifyCreateListener mask {:016X} system {} -> handle {:08X}", mask, is_system, handle);
 
   REXKRNL_DEBUG(
       "XamNotifyCreateListener(mask={:#018x}, is_system={}, max_version={}) -> handle={:08X}", mask,
@@ -88,6 +93,12 @@ u32 XNotifyGetNext_entry(u32 handle, u32 match_id, mapped_u32 id_ptr, mapped_u32
     *param_ptr = dequeued ? param : 0;
   }
 
+  if (dequeued && REXCVAR_GET(tw2de_diag_saves)) {
+    static std::atomic<uint32_t> said{0};
+    if (said.fetch_add(1) < 300)
+      REXKRNL_INFO("[saves] XNotifyGetNext listener {:08X} (asked {:08X}): id {:08X} param {:08X}", uint32_t(handle),
+                   uint32_t(match_id), id, param);
+  }
   if (dequeued) {
     REXKRNL_NOISY_DEBUG("XNotifyGetNext({:08X}, {:08X}) -> id={:#x}, param={}", uint32_t(handle),
                         uint32_t(match_id), id, param);

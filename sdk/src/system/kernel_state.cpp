@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -1203,9 +1204,16 @@ void KernelState::CompleteOverlapped(uint32_t overlapped_ptr, X_RESULT result) {
 void KernelState::CompleteOverlappedEx(uint32_t overlapped_ptr, X_RESULT result,
                                        uint32_t extended_error, uint32_t length) {
   auto ptr = memory()->TranslateVirtual(overlapped_ptr);
-  XOverlappedSetResult(ptr, result);
+  // TW2 (2026-11-17): the result last, after the length, the extended error and the data (an enumerator's items, a
+  // read's bytes), with a release fence before it. The result is what a game polls (XHasOverlappedIoCompleted: it is
+  // no longer IO_PENDING) from another thread, now on another core (switch_guest_thread_cores): written first, a poller
+  // could see the operation complete and read the length before it was set (an enumeration of 0 items: no saves), or
+  // read the buffer before the data was visible to its core (ARM orders plain stores to other cores only with a fence).
   XOverlappedSetExtendedError(ptr, extended_error);
   XOverlappedSetLength(ptr, length);
+  std::atomic_thread_fence(std::memory_order_release);
+  XOverlappedSetResult(ptr, result);
+  std::atomic_thread_fence(std::memory_order_seq_cst);
   X_HANDLE event_handle = XOverlappedGetEvent(ptr);
   if (event_handle) {
     auto ev = object_table()->LookupObject<XEvent>(event_handle);

@@ -12,6 +12,7 @@
 #include <rex/cvar.h>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
+REXCVAR_DECLARE(bool, tw2de_diag_saves);  // TW2 (2026-11-17): sdk/src/system/xobject.cpp
 #include <rex/math.h>
 #include <rex/hook.h>
 #include <rex/types.h>
@@ -77,6 +78,9 @@ u32 XamContentCreateEnumerator_entry(u32 user_index, u32 device_id, u32 content_
 
   auto device_info = device_id == 0 ? nullptr : GetDummyDeviceInfo(device_id);
   if ((device_id && device_info == nullptr) || !handle_out) {
+    if (REXCVAR_GET(tw2de_diag_saves))
+      REXKRNL_INFO("[saves] XamContentCreateEnumerator user {} device {:08X} type {:08X}: refused (no such device)",
+                   uint32_t(user_index), uint32_t(device_id), uint32_t(content_type));
     if (buffer_size_ptr) {
       *buffer_size_ptr = 0;
     }
@@ -126,6 +130,11 @@ u32 XamContentCreateEnumerator_entry(u32 user_index, u32 device_id, u32 content_
   }
 
   REXKRNL_DEBUG("XamContentCreateEnumerator: added {} items to enumerator", e->item_count());
+  if (REXCVAR_GET(tw2de_diag_saves))
+    REXKRNL_INFO("[saves] XamContentCreateEnumerator user {} device {:08X} type {:08X} flags {:08X} per read {} xuid "
+                 "{:016X}: {} item(s), handle {:08X}",
+                 uint32_t(user_index), uint32_t(device_id), uint32_t(content_type), uint32_t(content_flags),
+                 uint32_t(items_per_enumerate), xuid, e->item_count(), e->handle());
 
   *handle_out = e->handle();
   return X_ERROR_SUCCESS;
@@ -263,7 +272,7 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
     // What the game asks for and what we answer, in one line. It is the only place where both paths
     // are visible: the one that gets to create or open (which also leaves its own trace) and the one
     // cut short because the content "does not exist", which used to be silent.
-    if (REXCVAR_GET(log_diagnostics)) REXKRNL_INFO("[save] XamContentCreate root '{}' content '{}' type {:08X} mode {} -> {} (result {:08X})",
+    if (REXCVAR_GET(log_diagnostics) || REXCVAR_GET(tw2de_diag_saves)) REXKRNL_INFO("[save] XamContentCreate root '{}' content '{}' type {:08X} mode {} -> {} (result {:08X})",
                  root_name, content_data.file_name(), static_cast<uint32_t>(content_data.content_type.get()), flags & 0xF,
                  disposition == kDispositionState::Create  ? "create"
                  : disposition == kDispositionState::Open  ? "open"
@@ -327,6 +336,8 @@ u32 XamContentFlush_entry(mapped_string root_name, mapped_void overlapped_ptr) {
 u32 XamContentClose_entry(mapped_string root_name, mapped_void overlapped_ptr) {
   // Closes a previously opened root from XamContentCreate*.
   auto result = REX_KERNEL_STATE()->content_manager()->CloseContent(root_name.value());
+  if (REXCVAR_GET(tw2de_diag_saves))
+    REXKRNL_INFO("[saves] XamContentClose root '{}' -> {:08X}", root_name.value(), uint32_t(result));
   if (result != X_ERROR_SUCCESS) {
     REXKRNL_WARN("[save] XamContentClose root '{}': was not open (result {:08X})",
                  root_name.value(), uint32_t(result));

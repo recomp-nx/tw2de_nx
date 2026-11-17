@@ -10,6 +10,8 @@
  */
 
 #include <rex/logging.h>
+#include <rex/cvar.h>
+REXCVAR_DECLARE(bool, tw2de_diag_saves);  // TW2 (2026-11-17): sdk/src/system/xobject.cpp
 #include <rex/runtime.h>
 #include <rex/string.h>
 #include <rex/system/flags.h>
@@ -204,10 +206,22 @@ u32 XamShowDeviceSelectorUI_entry(u32 user_index, u32 content_type, u32 content_
                 uint32_t(user_index), uint32_t(content_type), uint32_t(content_flags),
                 uint64_t(total_requested), device_id_ptr.guest_address(),
                 overlapped.guest_address());
+  if (REXCVAR_GET(tw2de_diag_saves))
+    REXKRNL_INFO("[saves] XamShowDeviceSelectorUI user {} type {:08X} flags {:08X} (overlapped {:08X})",
+                 uint32_t(user_index), uint32_t(content_type), uint32_t(content_flags), overlapped.guest_address());
   return xeXamDispatchHeadless(
       [device_id_ptr]() -> X_RESULT {
+        // TW2 (2026-11-17, the main menu without Load / Continue): the answer written after the time a console's
+        // device selector takes at least (it is a dialog). The game stores -1 ("no device") into the very variable it
+        // passed here right AFTER the call returns IO_PENDING (sub_82E25D44: stw -1,0(r28) after the call to
+        // XamShowDeviceSelectorUI), counting on the dialog to answer later. The answer at once, from the dispatch
+        // thread on another core, sometimes landed before that store: the -1 won, XamContentGetDeviceState(FFFFFFFF)
+        // said "not connected" and the save list was never asked for (sessions 075 bad / 076 good).
+        rex::thread::Sleep(std::chrono::milliseconds(50));
         // NOTE: 0x00000001 is our dummy device ID from xam_content.cc
         *device_id_ptr = 0x00000001;
+        if (REXCVAR_GET(tw2de_diag_saves))
+          REXKRNL_INFO("[saves] XamShowDeviceSelectorUI: device 00000001 chosen");
         return X_ERROR_SUCCESS;
       },
       overlapped.guest_address());
