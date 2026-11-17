@@ -10297,7 +10297,18 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
     }
     HostSurface *out = GetHostSurfaceLocked(device.U32(d3d::kDeviceOffsetRenderTargets));
     const bool easu = UpscaleFilter() == 3;
+    // TW2 (2026-11-17, the stray old frame in cutscenes at 1280x720 + Lanczos + dynamic resolution): the upscale writes
+    // the output target's image, so a resolve destination still showing that image (the front buffer, handed over) gets
+    // its content first, as before any write (the FSR 3 pass above does the same). Without it a later part-covering
+    // draw (a cutscene's bars or subtitles) made the front buffer take the upscaled image and left the target in its
+    // spare image, last drawn seconds before, which the next Swap showed.
+    if (out && out->handed) {
+      g_colour_mat_why = 4;
+      ColourHandOverBeforeWriteLocked(out, 0);
+    }
     if (out && EarlyUpscaleCopyLocked(corner, tw2_final_w, tw2_final_h, out, easu)) {
+      if (!g_colour_cover.empty())  // TW2 (2026-11-17): the upscale writes all of it
+        ColourCoverMarkLocked(out, 0, int32_t(out->height));
       out->needs_clear = false;
       if (easu)
         Fsr1RcasRunLocked(out);
