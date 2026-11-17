@@ -4849,6 +4849,16 @@ private:
    virtual bool visit(BasicBlock *);
    bool movable(const Instruction *) const;
    static bool usesValue(const Instruction *, const Value *);
+   // tw2de (2026-11-17): a definition in a register fixed before allocation (the colour outputs' $rN)
+   static bool writesFixedGpr(const Instruction *j)
+   {
+      for (int d = 0; j->defExists(d); ++d) {
+         const Value *v = j->getDef(d);
+         if (v && v->reg.file == FILE_GPR && v->reg.data.id >= 0)
+            return true;
+      }
+      return false;
+   }
    static bool crossLane(const Instruction *i)
    {
       return isTextureOp(i->op) || i->op == OP_DFDX || i->op == OP_DFDY || i->op == OP_QUADOP ||
@@ -4983,6 +4993,12 @@ PressureSink::visit(BasicBlock *bb)
          if (j->op == OP_DISCARD && crossLane(i))
             break;
          if (j->op == OP_PHI)
+            break;
+         // tw2de (2026-11-17, from fnxf_xiii_2): nothing sinks past a write of a fixed register (a fragment shader's
+         // colour outputs: the "mov $rN" before EXIT). Nothing reads those registers as far as the allocator sees (the
+         // hardware does at EXIT), so an instruction placed after one could be given its register and overwrite the
+         // output: the G-buffer's red of 2026-11-12 (then avoided by turning flag 65536 off).
+         if (writesFixedGpr(j))
             break;
       }
       if (!first || first == i->next)

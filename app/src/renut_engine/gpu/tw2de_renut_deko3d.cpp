@@ -117,7 +117,9 @@ namespace {
 // tw2de (2026-10-20): bnx4 with uam tw2de flag 1024 (the 128-bit bone rows) in the default flags: a cache
 // compiled before is another compiler's.
 // tw2de (2026-10-21): bnx5, uam with PressureSink (flags 2048 + 8192 in the default 11711).
-constexpr char kCacheTag[16] = "uam110-sw8-bnx5";
+// tw2de (2026-11-17): bnx6, PressureSink no longer sinks past a fixed-register write (a fragment shader's colour
+// outputs; the G-buffer's red of 2026-11-12). Every DKSH is compiled again.
+constexpr char kCacheTag[16] = "uam110-sw8-bnx6";
 
 constexpr uint32_t kDkshMagic = 0x48534B44u;  // "DKSH", the first word of every record's data
 // tw2de (2026-10-22): the cache's generation (<path>.gen, a u32), for compiles made better without starting the
@@ -385,7 +387,9 @@ int64_t ReadIndex(DkshCache &c, int64_t length) {
 // deko3d_shaders_f11711.bin: that file and what it derives take the plain name at the first start (renamed: the
 // compiled shaders stay). A deko3d_shaders.bin already there is from before 2026-11-12 (11711's and 77247's records
 // in one file) and goes first with all it derives, so none of its parts stays next to the cache that takes the name.
-constexpr unsigned kDefaultUamFlags = 11711u;
+// TW2 (2026-11-17): 77247 again (tw2de_deko3d_uam_pressure_blocks on by default once more): the default flags' cache keeps
+// the plain name. A deko3d_shaders_f77247.bin of before is renamed to it, and the new tag (bnx6) starts it over.
+constexpr unsigned kDefaultUamFlags = 77247u;
 
 std::string DefaultCachePath() {
   static constexpr const char *kDerived[] = {".idx", ".end", ".gen", ".fast"};
