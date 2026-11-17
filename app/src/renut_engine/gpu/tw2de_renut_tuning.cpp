@@ -183,9 +183,10 @@ REXCVAR_DEFINE_BOOL(tw2de_deko3d_uam_pressure, true, "tw2de",
 // (E8EB382B..., D98DDFF4..., 904379EF...) wrote their specular term saturate(cN.x * 0.005) as the albedo's red (a red
 // constant per shader, green and blue right): everything lit came out green. All of tw2de_deko3d_uam_pressure off:
 // right colours. The sink across blocks (65536) on its own switch to find which part does it.
-REXCVAR_DEFINE_BOOL(tw2de_deko3d_uam_pressure_blocks, false, "tw2de",
-                    "deko3d renderer (2026-10-22): the pressure sink across blocks too (uam flag 65536); off since "
-                    "2026-11-12 (TW2: the G-buffer's red miscompiled with the pressure flags)")
+REXCVAR_DEFINE_BOOL(tw2de_deko3d_uam_pressure_blocks, true, "tw2de",
+                    "deko3d renderer (2026-10-22): the pressure sink across blocks too (uam flag 65536). Off from "
+                    "2026-11-12 (the G-buffer's red miscompiled), on again since 2026-11-17: the miscompile was the "
+                    "sink passing a colour output's register write (uam fixed, nv50_ir_peephole.cpp writesFixedGpr)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(tw2de_deko3d_uam_wide_rows, true, "Game/Enhancements",
                     "deko3d renderer (2026-10-20, GPU): uam reads each bone row of tools/deko3d_glsl_opt.py's aw4 view "
