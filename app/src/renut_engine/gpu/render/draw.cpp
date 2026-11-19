@@ -14010,6 +14010,25 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
 // (the post-processing's and the UI's targets of the scene's size promoted to the output's size) and each texture the
 // scene was resolved into is upscaled from its scene-size variant (already resolved: single-sampled, MSAA's too) into
 // its output-size one with Lanczos-2 (render/early_upscale.cpp).
+// TW2 (2026-11-19, from the Final Fantasy XIII-2 tree): a resolve destination about to be written outside a resolve (the
+// early upscale, the early FSR 3.1 copies): its content is its own texture again. A destination left holding a
+// target's image (the colour hand-over: the post-processing's resolve of its target into the scene's texture, late
+// in the frame) kept it, and the next frame's post-processing sampled that image (the last frame's processed picture)
+// instead of what the upscale wrote: there the bloom fed on itself with dynamic resolution, the picture going white
+// in a second. A write of all of it drops what it held; a part has the rest drawn in first.
+void OwnContentBeforeWriteLocked(HostTexture *d, bool whole) {
+  if (!d || (!d->handed_from && !d->held_current))
+    return;
+  if (whole) {
+    UnhandLocked(*d);
+    d->held_current = false;
+    ++g_texture_epoch;
+  } else {
+    g_colour_mat_why = 7;
+    MaterialiseLocked(*d, false);
+  }
+}
+
 void EarlyUpscaleBeforePostLocked(HostSurface *scene, const std::vector<SceneResolve> &resolves) {
   const u32 rh = tw2de::RenderHeight();
   RenderScale out_scale{};
@@ -14065,6 +14084,7 @@ void EarlyUpscaleBeforePostLocked(HostSurface *scene, const std::vector<SceneRes
       dest->drs_code = 0;
       ++g_texture_epoch;
     }
+    OwnContentBeforeWriteLocked(dest, out_w >= dest->alloc_width && out_h >= dest->alloc_height);
     if (!EarlyUpscaleLocked(srcs[i], src_w, src_h, dest, out_w, out_h, UpscaleFilter() == 3))
       continue;
     if (dest->extra_levels)
@@ -14178,6 +14198,8 @@ void EarlyFsrBeforePostLocked(const GuestDevice &device) {
     rect.bottom = std::min(rect.bottom, int32_t(out_h));
     if (rect.right <= rect.left || rect.bottom <= rect.top)
       continue;
+    OwnContentBeforeWriteLocked(dest, host_x == 0 && host_y == 0 && rect.right - rect.left >= int32_t(dest->alloc_width) &&
+                                          rect.bottom - rect.top >= int32_t(dest->alloc_height));
     dest->resolve_signature = 0;
     if (dest->drs_code != 0) {
       dest->drs_code = 0;

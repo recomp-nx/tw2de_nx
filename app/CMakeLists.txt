@@ -294,7 +294,7 @@ endif()
 rexglue_switch_add_nro(tw2de
     NAME "TW2DE NX"
     AUTHOR "recomp-nx"
-    VERSION "0.1.4"
+    VERSION "0.2.0"
     ${TW2DE_ICON_ARG}
     ${TW2DE_ROMFS_ARG})
 
