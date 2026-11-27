@@ -68,11 +68,16 @@ struct Pending {
   u32 query;
   std::vector<u32> blocks;  // the result blocks' virtual addresses
   int32_t begin, end;       // report indices (begin -1: none recorded)
+  // TW2 (2026-11-27, from fnxf_xiii_2): the renderer's own draws made while the query was open (report pairs), not
+  // the game's: their samples are taken off its result (OcclusionQueriesExcludeBeginLocked).
+  std::vector<std::pair<int32_t, int32_t>> excluded;
 };
 
 std::mutex g_mutex;                         // the pending list and the begin map
 std::vector<Pending> g_pending;
 std::unordered_map<u32, int32_t> g_begin;   // query -> its begin report (render thread)
+std::unordered_map<u32, std::vector<std::pair<int32_t, int32_t>>> g_excluded;  // open query -> renderer draws in it
+int32_t g_exclude_begin = -1;
 std::unique_ptr<plume::RenderQueryPool> g_pool;  // render thread (created there)
 const volatile uint64_t *g_reports = nullptr;
 uint32_t g_next = 0;
@@ -128,13 +133,22 @@ void Resolve() {
   std::lock_guard lock(g_mutex);
   for (size_t i = 0; i < g_pending.size();) {
     Pending &p = g_pending[i];
-    if (p.end < 0 || !Written(p.end) || (p.begin >= 0 && !Written(p.begin))) {
+    bool excluded_written = true;
+    for (const auto &[a, b] : p.excluded)
+      excluded_written = excluded_written && Written(a) && Written(b);
+    if (p.end < 0 || !Written(p.end) || (p.begin >= 0 && !Written(p.begin)) || !excluded_written) {
       ++i;
       continue;
     }
     const uint64_t end = g_reports[uint32_t(p.end) * 2];
     const uint64_t begin = p.begin >= 0 ? g_reports[uint32_t(p.begin) * 2] : end;
-    const uint32_t samples = uint32_t(end >= begin ? std::min<uint64_t>(end - begin, 0xFFFFFFFFu) : 0);
+    uint64_t own = 0;
+    for (const auto &[a, b] : p.excluded) {
+      const uint64_t ra = g_reports[uint32_t(a) * 2], rb = g_reports[uint32_t(b) * 2];
+      own += rb >= ra ? rb - ra : 0;
+    }
+    const uint64_t game = end >= begin ? end - begin : 0;
+    const uint32_t samples = uint32_t(std::min<uint64_t>(game >= own ? game - own : 0, 0xFFFFFFFFu));
     for (size_t b = 0; b < p.blocks.size(); b++) {
       if (u8 *block = GuestPtr<u8>(p.blocks[b])) {
         std::memset(block, 0, 0x40);
@@ -175,6 +189,7 @@ extern "C" REX_FUNC(sub_82D110B0) {
       if (!g_begin.count(query))
         ++g_tw2_open_queries;
       g_begin[query] = index;
+      g_excluded.erase(query);
     });
   }
   if (flags & kIssueEnd) {
@@ -208,7 +223,12 @@ extern "C" REX_FUNC(sub_82D110B0) {
         begin = it->second;
         g_begin.erase(it);
       }
-      g_pending.push_back({query, std::move(blocks), begin, index});
+      std::vector<std::pair<int32_t, int32_t>> excluded;
+      if (auto it = g_excluded.find(query); it != g_excluded.end()) {
+        excluded = std::move(it->second);
+        g_excluded.erase(it);
+      }
+      g_pending.push_back({query, std::move(blocks), begin, index, std::move(excluded)});
     });
   }
   static std::atomic<bool> logged{false};
@@ -263,3 +283,32 @@ extern "C" REX_FUNC(sub_82D11360) {
   else
     std::this_thread::sleep_for(std::chrono::microseconds(50));
 }
+
+// TW2 (2026-11-27, from fnxf_xiii_2): the renderer's own full-screen draws (render/draw.cpp: the depth resolve, the
+// held picture's copy, the colour hand-over, the EDRAM carry, the half-depth fill) come between a query's begin and
+// end reports when the game has one open: a samples-passed report counts every sample that passes, theirs too. Around
+// such a draw (render thread, State().mutex held) these record a report pair that each open query's result subtracts.
+namespace renut::gpu {
+void OcclusionQueriesExcludeBeginLocked() {
+  g_exclude_begin = -1;
+  if (g_tw2_open_queries <= 0 || !tw2de::renut_gpu::Active())
+    return;
+  {
+    std::lock_guard lock(g_mutex);
+    if (g_begin.empty())
+      return;
+  }
+  g_exclude_begin = ReportLocked();
+}
+
+void OcclusionQueriesExcludeEndLocked() {
+  if (g_exclude_begin < 0)
+    return;
+  const int32_t end = ReportLocked();
+  std::lock_guard lock(g_mutex);
+  if (end >= 0)
+    for (const auto &[query, begin] : g_begin)
+      g_excluded[query].push_back({g_exclude_begin, end});
+  g_exclude_begin = -1;
+}
+}  // namespace renut::gpu

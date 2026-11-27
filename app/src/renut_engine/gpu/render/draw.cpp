@@ -8691,6 +8691,10 @@ REXCVAR_DEFINE_BOOL(tw2de_skip_inert_draws, true, "Game/Enhancements",
                     "occlusion query is open. Same pixels")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 extern int g_tw2_open_queries;  // d3d/hooks/query.cpp
+// TW2 (2026-11-27, from fnxf_xiii_2): around the renderer's own full-screen draws, a report pair the open occlusion
+// queries take off their results (d3d/hooks/query.cpp).
+void OcclusionQueriesExcludeBeginLocked();
+void OcclusionQueriesExcludeEndLocked();
 uint64_t g_tw2_inert_skipped = 0;
 [[gnu::noinline]] bool Tw2InertDrawLocked(const u8 *device_state) {
   const GuestDevice device(device_state);
@@ -11816,7 +11820,9 @@ bool ResolveDepth(HostSurface *surface, HostTexture *dest, const ClearRect &src,
                     ? 1.0f
                     : 0.0f;
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+  OcclusionQueriesExcludeBeginLocked();  // TW2 (2026-11-27): not counted by an open query
   cmd->drawInstanced(3, 1, 0, 0);
+  OcclusionQueriesExcludeEndLocked();
   TransitionTextureLocked(dest, plume::RenderTextureLayout::SHADER_READ);
 
   // The draw path binds its own layout, pipeline, targets and viewport again.
@@ -12787,7 +12793,9 @@ bool DrawHeldIntoSurfaceLocked(HostTexture &d, HostSurface *to) {
     push.texture_index = source_slot;
     push.sampler_index = kPointClampSamplerSlot;
     cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+    OcclusionQueriesExcludeBeginLocked();  // TW2 (2026-11-27): not counted by an open query
     cmd->drawInstanced(3, 1, 0, 0);
+    OcclusionQueriesExcludeEndLocked();
   }
   SwapDepthImageLocked(image, *d.held);
   g_bound.framebuffer = nullptr;
@@ -13111,7 +13119,9 @@ bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::Rende
   push.texture_index = source_slot;
   push.sampler_index = kPointClampSamplerSlot;
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+  OcclusionQueriesExcludeBeginLocked();  // TW2 (2026-11-27): not counted by an open query
   cmd->drawInstanced(3, 1, 0, 0);
+  OcclusionQueriesExcludeEndLocked();
   if (!one_sample)
     tw2de::renut_gpu::CountDrawnResolve();
   // The draw path binds its own layout, pipeline, targets and viewport again.
@@ -13237,7 +13247,9 @@ void EdramCarryLocked(const Targets &t) {
     push.param0 = 1.0f;  // present_ps: no gamma
     push.param1 = 0.0f;  // no gamma ramp
     cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+    OcclusionQueriesExcludeBeginLocked();  // TW2 (2026-11-27): not counted by an open query
     cmd->drawInstanced(3, 1, 0, 0);
+    OcclusionQueriesExcludeEndLocked();
     ++c->writes;  // tw2de_renut_resolve_skip
     // The draw binds its own layout, pipeline and viewport again (its targets stay bound).
     g_bound.pipeline = nullptr;
@@ -13394,7 +13406,9 @@ void HalfDepthFillLocked(const Targets &t) {
   push.param0 = float(src->scale.DrawnSize(src->width)) / std::max(w, 1.0f);
   push.param1 = float(src->scale.DrawnSize(src->height)) / std::max(h, 1.0f);
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+  OcclusionQueriesExcludeBeginLocked();  // TW2 (2026-11-27): not counted by an open query
   cmd->drawInstanced(3, 1, 0, 0);
+  OcclusionQueriesExcludeEndLocked();
   ++d->writes;
   g_bound.pipeline = nullptr;
   g_bound.layout = false;
