@@ -26,10 +26,10 @@ Additional improvements:
 - Removed any notification about installing on drive and removed option for choosing mass storage from game settings.
 
 ## Known bugs:
-- Game may randomly not start when docked to 1080p TV
-- Main menu may randomly not appear at all
+- Game may randomly not boot
 - Some graphics effects are still missing
 - With CPU overclocked, first video's audio crackles
+- Randomly, game can get one frame worth of input lag more than usual
 
 ## Performance
 
